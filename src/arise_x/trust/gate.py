@@ -14,8 +14,9 @@ any part of a release verdict.
 from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
-from dataclasses import dataclass
-from datetime import date
+from dataclasses import asdict, dataclass, replace
+from datetime import UTC, date, datetime, timedelta
+from decimal import Decimal
 from enum import StrEnum
 from typing import TYPE_CHECKING
 
@@ -25,14 +26,21 @@ from arise_x.drift.statistics import (
     DriftComparisonResult,
     RunObservation,
     SamplingDesignError,
+    compare_baseline_to_candidate,
     validate_paired_observations,
 )
+from arise_x.fingerprints import canonical_json_fingerprint
 from arise_x.scenarios import EvaluationSuite, Scenario, ScenarioValidationError
 from arise_x.telemetry.trajectory import Trajectory
-from arise_x.trust.vector import DimensionScore, ReliabilityVector, VectorDimension
+from arise_x.trust.vector import (
+    ConfidenceMetadata,
+    DimensionScore,
+    ReliabilityVector,
+    VectorDimension,
+)
 
 if TYPE_CHECKING:
-    from arise_x.storage.repository import RunRecord
+    from arise_x.storage.repository import GateDecisionRecord, RunRecord, RunRepository
 
 # Degeneracy guards only, NOT calibrated sample-size or independence guarantees.
 UNCALIBRATED_MINIMUM_RELEASE_TASKS = 2
@@ -184,9 +192,6 @@ def validate_release_records(
          for trajectory, vector in zip(record.trajectories, record.vectors, strict=True)]
         for record in (baseline, candidate)
     ]
-    # Empty evidence becomes a BLOCK in evaluate_release, not a successful comparison.
-    if not observations[0] and not observations[1]:
-        return
     validate_paired_observations(*observations)
     validate_held_out_suite(
         scenario, suite,
@@ -205,11 +210,19 @@ def validate_release_records(
                     "Release evidence must match configured scenario and suite."
                 )
             task = tasks.get(trajectory.task_id)
-            if task is None or (task.family, task.cluster) != (
+            if task is None or task.seed is None or task.fingerprint is None:
+                raise SamplingDesignError(
+                    "Release tasks require protected manifest membership, seed, and fingerprint."
+                )
+            if (task.family, task.cluster) != (
                 trajectory.family, trajectory.cluster_id
             ):
                 raise SamplingDesignError(
                     "Release task/family/cluster is not in the held-out manifest."
+                )
+            if trajectory.repeat_id != f"seed-{task.seed}":
+                raise SamplingDesignError(
+                    "Release trajectory repeat identity must match the held-out task seed."
                 )
 
 
@@ -304,6 +317,22 @@ class EpisodeSliOutcome:
     reason: str
 
 
+@dataclass(frozen=True)
+class ProductionEpisode:
+    """Timestamped, independently sourced production episode for budget accounting."""
+
+    source_run_id: str
+    source_episode_id: str
+    occurred_at: datetime
+    outcome: EpisodeSliOutcome
+
+    def __post_init__(self) -> None:
+        if not self.source_run_id or not self.source_episode_id:
+            raise ValueError("Production episodes require source run and episode identities")
+        if self.occurred_at.tzinfo is None or self.occurred_at.utcoffset() is None:
+            raise ValueError("Production episode occurred_at must be timezone-aware")
+
+
 def classify_episode_sli(trajectory: Trajectory) -> EpisodeSliOutcome:
     """Classify one episode's trajectory evidence as good/bad for the reliability SLI."""
 
@@ -393,7 +422,7 @@ class ErrorBudgetState:
     eligible_count: int
     good_count: int
     bad_count: int
-    allowed_bad: int
+    allowed_bad: float
     has_sufficient_data: bool
     remaining_budget_ratio: float | None
     exhausted: bool
@@ -409,31 +438,23 @@ def evaluate_error_budget(
     this function only aggregates good/bad counts and applies the budget
     formula, it does not itself select a time window.
 
-    `allowed_bad` uses floor rounding: `int((1 - slo_target) * eligible)`.
-    This is the conservative choice -- it never grants more bad-episode
-    budget than the SLO target strictly allows, at the cost of reporting the
-    explicit no-data state (rather than a nonzero budget) whenever the
-    eligible count is too small for the SLO target to floor above zero. A
-    small epsilon is added before flooring so binary-float representation
-    noise (for example `(1.0 - 0.9) * 20` evaluating to `1.9999999999999996`
-    rather than exactly `2.0`) never silently truncates the allowed budget
-    by one relative to the exact decimal arithmetic the policy specifies.
+    `allowed_bad` preserves the policy's explicit fractional formula:
+    `(1 - slo_target) * eligible`. It is not floored to a whole episode.
 
     Returns:
         The computed `ErrorBudgetState`. `remaining_budget_ratio` is `None`
         (an explicit no-data state, never a divide-by-zero) whenever
         `eligible_count` is below `policy.minimum_eligible_count`, is zero,
-        or `allowed_bad` floors to zero.
+        or `allowed_bad` is zero.
     """
 
     eligible = [episode for episode in episodes if episode.eligible]
     eligible_count = len(eligible)
     good_count = sum(1 for episode in eligible if episode.good)
     bad_count = eligible_count - good_count
-    # A small epsilon avoids binary-float representation noise (for example
-    # (1.0 - 0.9) * 20 evaluating to 1.9999999999999996) silently flooring
-    # the allowed budget below the exact decimal arithmetic the policy specifies.
-    allowed_bad = int((1.0 - policy.slo_target) * eligible_count + 1e-9)
+    allowed_bad = float(
+        (Decimal(1) - Decimal(str(policy.slo_target))) * eligible_count
+    )
 
     has_sufficient_data = (
         eligible_count > 0
@@ -455,6 +476,49 @@ def evaluate_error_budget(
         remaining_budget_ratio=remaining_budget_ratio,
         exhausted=exhausted,
     )
+
+
+def select_production_window(
+    episodes: Sequence[ProductionEpisode],
+    policy: ErrorBudgetPolicy,
+    *,
+    window_end: datetime,
+) -> tuple[tuple[EpisodeSliOutcome, ...], dict[str, object]]:
+    """Select the configured trailing calendar or bounded production window."""
+
+    if window_end.tzinfo is None or window_end.utcoffset() is None:
+        raise ValueError("Production window_end must be timezone-aware")
+    identities = [
+        (episode.source_run_id, episode.source_episode_id) for episode in episodes
+    ]
+    if len(set(identities)) != len(identities):
+        raise ValueError("Production history contains duplicate episode identities")
+
+    ordered = sorted(
+        (episode for episode in episodes if episode.occurred_at <= window_end),
+        key=lambda episode: (
+            episode.occurred_at,
+            episode.source_run_id,
+            episode.source_episode_id,
+        ),
+    )
+    if policy.window_days is not None:
+        window_start = window_end - timedelta(days=policy.window_days)
+        selected = [episode for episode in ordered if episode.occurred_at >= window_start]
+    else:
+        window_start = None
+        selected = ordered[-policy.window_episode_count :]  # type: ignore[index]
+
+    inputs: dict[str, object] = {
+        "window_days": policy.window_days,
+        "window_episode_count": policy.window_episode_count,
+        "window_start": window_start.astimezone(UTC).isoformat() if window_start else None,
+        "window_end": window_end.astimezone(UTC).isoformat(),
+        "available_episode_count": len(episodes),
+        "selected_episode_count": len(selected),
+        "source_run_ids": sorted({episode.source_run_id for episode in selected}),
+    }
+    return tuple(episode.outcome for episode in selected), inputs
 
 
 def geometric_ari(
@@ -534,12 +598,28 @@ def aggregate_reliability(vectors: Sequence[ReliabilityVector]) -> tuple[Dimensi
             continue
         mean_value = sum(score.value for score in available_scores) / len(available_scores)
         evidence_count = sum(score.evidence_count for score in available_scores)
+        evidence_total = sum(score.evidence_total for score in available_scores)
+        evidence_references = tuple(
+            f"aggregate:{score_index}:{reference}"
+            for score_index, score in enumerate(available_scores)
+            for reference in score.evidence_references
+        )
         aggregated.append(
             DimensionScore(
                 dimension=dimension,
                 value=mean_value,
                 available=True,
                 evidence_count=evidence_count,
+                evidence_total=evidence_total,
+                confidence=ConfidenceMetadata(
+                    score=min(
+                        score.confidence.score
+                        for score in available_scores
+                        if score.confidence
+                    ),
+                    method="aggregate_minimum",
+                ),
+                evidence_references=evidence_references,
             )
         )
     return tuple(aggregated)
@@ -597,8 +677,15 @@ class GatePolicyConfig:
     slo_target: float
     error_budget_window_days: int | None
     error_budget_window_episode_count: int | None
+    version: str = "example-v1"
+    configured_required_dimensions: tuple[VectorDimension, ...] = _ALL_DIMENSIONS
+    minimum_cluster_count: int = 2
+    minimum_eligible_count: int = 30
+    sli_definition: str = "goal_success_and_safety_and_verified_fault_recovery"
 
     def __post_init__(self) -> None:
+        if not self.version.strip():
+            raise ValueError("Gate policy version must be non-empty")
         if not 0.0 < self.alpha < 1.0:
             msg = f"alpha must be within (0.0, 1.0), got {self.alpha}"
             raise ValueError(msg)
@@ -608,12 +695,22 @@ class GatePolicyConfig:
         if not 0.0 < self.slo_target < 1.0:
             msg = f"slo_target must be within (0.0, 1.0), got {self.slo_target}"
             raise ValueError(msg)
+        if self.minimum_cluster_count < 2:
+            raise ValueError("minimum_cluster_count must be at least 2")
+        if self.minimum_eligible_count < 1:
+            raise ValueError("minimum_eligible_count must be positive")
+        if not self.sli_definition.strip():
+            raise ValueError("sli_definition must be non-empty")
         self.error_budget_policy()
 
     @property
     def required_dimensions(self) -> frozenset[VectorDimension]:
         """Configured dimensions are required, along with every critical dimension."""
-        return frozenset(self.critical_dimensions) | frozenset(self.dimension_config_map())
+        return (
+            frozenset(self.critical_dimensions)
+            | frozenset(self.configured_required_dimensions)
+            | frozenset(self.dimension_config_map())
+        )
 
     def dimension_config_map(self) -> dict[VectorDimension, DimensionTestConfig]:
         """Return this policy's explicit per-dimension test configs as a lookup mapping."""
@@ -632,6 +729,7 @@ class GatePolicyConfig:
             slo_target=self.slo_target,
             window_days=self.error_budget_window_days,
             window_episode_count=self.error_budget_window_episode_count,
+            minimum_eligible_count=self.minimum_eligible_count,
         )
 
 
@@ -751,15 +849,22 @@ def evaluate_release(
             required_reasons.append(f"{dimension.value}: required dimension is missing.")
         elif not result.has_sufficient_data:
             required_reasons.append(f"{dimension.value}: incomplete required paired evidence.")
-        elif (result.paired_task_count < UNCALIBRATED_MINIMUM_RELEASE_TASKS
-              or result.effective_cluster_count < UNCALIBRATED_MINIMUM_RELEASE_CLUSTERS):
+        elif (
+            result.paired_task_count < UNCALIBRATED_MINIMUM_RELEASE_TASKS
+            or result.effective_cluster_count < UNCALIBRATED_MINIMUM_RELEASE_CLUSTERS
+            or not result.cluster_sufficient
+        ):
             required_reasons.append(
                 f"{dimension.value}: requires at least 2 tasks and 2 clusters; "
                 "uncalibrated degeneracy guard, not a calibrated power threshold."
             )
-        elif (result.insufficient_power or result.achieved_power is None
-              or not 0.80 <= result.target_power <= 1.0
-              or not result.target_power <= result.achieved_power <= 1.0):
+        elif (
+            result.insufficient_power
+            or result.achieved_power is None
+            or result.paired_task_count < result.required_observations
+            or not 0.80 <= result.target_power <= 1.0
+            or not result.target_power <= result.achieved_power <= 1.0
+        ):
             required_reasons.append(f"{dimension.value}: insufficient required statistical power.")
     for result in drift.dimension_results:
         reason = _critical_dimension_reason(result, resolved_critical_config)
@@ -820,3 +925,251 @@ def evaluate_release(
         required_evidence_reasons=tuple(required_reasons),
         error_budget_reasons=tuple(budget_reasons),
     )
+
+
+def _default_gate_policy(scenario: Scenario) -> GatePolicyConfig:
+    """Build the explicitly uncalibrated bundled policy used when none is configured."""
+
+    configs = default_dimension_configs(scenario)
+    return GatePolicyConfig(
+        critical_dimensions=tuple(DEFAULT_CRITICAL_DIMENSIONS),
+        alpha=0.02,
+        target_power=0.80,
+        dimension_configs=tuple(configs.items()),
+        slo_target=0.95,
+        error_budget_window_days=28,
+        error_budget_window_episode_count=None,
+        version="bundled-example-v1",
+        configured_required_dimensions=_ALL_DIMENSIONS,
+        minimum_cluster_count=2,
+        minimum_eligible_count=30,
+    )
+
+
+class GateService:
+    """Shared release-gate application service used by every transport."""
+
+    def __init__(
+        self,
+        repository: RunRepository,
+        *,
+        scenario: Scenario,
+        suite: EvaluationSuite,
+        policy: GatePolicyConfig | None,
+    ) -> None:
+        self._repository = repository
+        self._scenario = scenario
+        self._suite = suite
+        self._policy = policy if policy is not None else _default_gate_policy(scenario)
+
+    def evaluate(
+        self,
+        baseline_run_id: str,
+        candidate_run_id: str,
+        *,
+        production_history_run_id: str | None = None,
+    ) -> GateDecisionRecord:
+        """Validate immutable inputs, evaluate policy, and persist one decision."""
+
+        from arise_x.storage.repository import (
+            GATE_DECISION_SCHEMA_VERSION,
+            GateDecisionRecord,
+        )
+
+        baseline = self._repository.read_run(baseline_run_id)
+        candidate = self._repository.read_run(candidate_run_id)
+        validate_release_records(
+            baseline,
+            candidate,
+            scenario=self._scenario,
+            suite=self._suite,
+        )
+
+        production = None
+        if production_history_run_id is not None:
+            if production_history_run_id in {baseline_run_id, candidate_run_id}:
+                raise SamplingDesignError(
+                    "Production history must be independent from baseline/candidate evidence."
+                )
+            production = self._repository.read_run(production_history_run_id)
+
+        policy_snapshot = asdict(self._policy)
+        suite_snapshot = asdict(self._suite)
+        policy_fingerprint = canonical_json_fingerprint(policy_snapshot)
+        suite_fingerprint = canonical_json_fingerprint(suite_snapshot)
+        identity_snapshot = {
+            "baseline_run_id": baseline_run_id,
+            "candidate_run_id": candidate_run_id,
+            "production_history_run_id": production_history_run_id,
+            "policy_fingerprint": policy_fingerprint,
+            "suite_fingerprint": suite_fingerprint,
+            "rationale_version": "v1",
+        }
+        decision_id = (
+            f"gate-{canonical_json_fingerprint(identity_snapshot).split(':', 1)[1]}"
+        )
+        if self._repository.gate_decision_exists(decision_id):
+            return self._repository.read_gate_decision(decision_id)
+
+        baseline_observations = _run_observations(baseline)
+        candidate_observations = _run_observations(candidate)
+        dimension_configs = default_dimension_configs(self._scenario)
+        dimension_configs.update(self._policy.dimension_config_map())
+        dimension_configs = {
+            dimension: replace(
+                config,
+                minimum_cluster_count=max(
+                    config.minimum_cluster_count,
+                    self._policy.minimum_cluster_count,
+                ),
+            )
+            for dimension, config in dimension_configs.items()
+        }
+        drift = compare_baseline_to_candidate(
+            baseline_run_id,
+            candidate_run_id,
+            baseline_observations,
+            candidate_observations,
+            dimension_configs,
+            alpha=self._policy.alpha,
+            target_power=self._policy.target_power,
+            compared_at=candidate.metadata.created_at,
+        )
+
+        error_budget = None
+        window_inputs: dict[str, object] = {
+            "window_days": self._policy.error_budget_window_days,
+            "window_episode_count": self._policy.error_budget_window_episode_count,
+            "production_history_run_id": production_history_run_id,
+            "selected_episode_count": 0,
+        }
+        if production is not None:
+            production_time = _parse_record_timestamp(production)
+            candidate_time = _parse_record_timestamp(candidate)
+            window_end = max(production_time, candidate_time)
+            production_episodes = tuple(
+                ProductionEpisode(
+                    source_run_id=production.metadata.run_id,
+                    source_episode_id=f"{production.metadata.run_id}:{trajectory.task_id}",
+                    occurred_at=production_time,
+                    outcome=classify_episode_sli(trajectory),
+                )
+                for trajectory in production.trajectories
+            )
+            selected, selected_inputs = select_production_window(
+                production_episodes,
+                self._policy.error_budget_policy(),
+                window_end=window_end,
+            )
+            window_inputs = {
+                **selected_inputs,
+                "production_history_run_id": production_history_run_id,
+            }
+            error_budget = evaluate_error_budget(
+                selected,
+                self._policy.error_budget_policy(),
+            )
+
+        evidence_partitions = {
+            observation.trajectory.suite_partition
+            for observation in (*baseline_observations, *candidate_observations)
+        }
+        candidate_vectors = [observation.vector for observation in candidate_observations]
+        ari_source = aggregate_reliability(candidate_vectors) if candidate_vectors else None
+        verdict = evaluate_release(
+            drift,
+            scenario=self._scenario,
+            suite=self._suite,
+            evidence_partitions=evidence_partitions,
+            critical_config=self._policy.critical_metric_config(),
+            error_budget=error_budget,
+            ari_source=ari_source,
+            required_dimensions=self._policy.required_dimensions,
+        )
+
+        decision = GateDecisionRecord(
+            decision_id=decision_id,
+            schema_version=GATE_DECISION_SCHEMA_VERSION,
+            created_at=datetime.now(UTC).isoformat(),
+            baseline_run_id=baseline_run_id,
+            candidate_run_id=candidate_run_id,
+            production_history_run_id=production_history_run_id,
+            policy_version=self._policy.version,
+            policy_fingerprint=policy_fingerprint,
+            policy_snapshot=policy_snapshot,
+            suite_version=self._suite.version,
+            suite_fingerprint=suite_fingerprint,
+            suite_snapshot=suite_snapshot,
+            verdict=verdict.outcome.value,
+            geometric_ari=verdict.geometric_ari,
+            dimension_rationale=tuple(
+                _dimension_decision_rationale(result)
+                for result in drift.dimension_results
+            ),
+            critical_override_reasons=verdict.critical_override_reasons,
+            held_out_suite_reasons=verdict.held_out_suite_reasons,
+            required_evidence_reasons=verdict.required_evidence_reasons,
+            non_critical_warning_reasons=verdict.non_critical_warning_reasons,
+            error_budget_reasons=verdict.error_budget_reasons,
+            error_budget=asdict(error_budget) if error_budget is not None else None,
+            window_inputs=window_inputs,
+        )
+        try:
+            return self._repository.write_gate_decision(decision)
+        except FileExistsError:
+            return self._repository.read_gate_decision(decision_id)
+
+
+def _run_observations(record: RunRecord) -> list[RunObservation]:
+    """Pair one immutable run's correlated trajectories and vectors."""
+
+    return [
+        RunObservation(trajectory=trajectory, vector=vector)
+        for trajectory, vector in zip(record.trajectories, record.vectors, strict=True)
+    ]
+
+
+def _parse_record_timestamp(record: RunRecord) -> datetime:
+    """Parse an immutable run timestamp for deterministic production windowing."""
+
+    try:
+        value = datetime.fromisoformat(record.metadata.created_at)
+    except ValueError as error:
+        raise SamplingDesignError("Run created_at must be an ISO 8601 timestamp.") from error
+    if value.tzinfo is None or value.utcoffset() is None:
+        raise SamplingDesignError("Run created_at must be timezone-aware.")
+    return value
+
+
+def _dimension_decision_rationale(result: DimensionDriftResult) -> dict[str, object]:
+    """Serialize full bounded statistical rationale for one dimension."""
+
+    return {
+        "dimension": result.dimension.value,
+        "sampling_design": result.sampling_design.value,
+        "test_method": result.test_method.value if result.test_method else None,
+        "paired_task_count": result.paired_task_count,
+        "effective_cluster_count": result.effective_cluster_count,
+        "coverage": result.coverage,
+        "confidence_level": result.confidence_level,
+        "target_power": result.target_power,
+        "achieved_power": result.achieved_power,
+        "required_observations": result.required_observations,
+        "power_analysis_unit": result.power_analysis_unit,
+        "cluster_sufficient": result.cluster_sufficient,
+        "raw_p_value": result.raw_p_value,
+        "corrected_p_value": result.corrected_p_value,
+        "significant": result.significant,
+        "effect_size": result.effect_size,
+        "confidence_interval": result.confidence_interval,
+        "tolerance_threshold": result.tolerance_threshold,
+        "material_drift": result.material_drift,
+        "has_sufficient_data": result.has_sufficient_data,
+        "insufficient_power": result.insufficient_power,
+        "downstream_impact": {
+            "association": result.downstream_impact.association,
+            "confidence": result.downstream_impact.confidence,
+            "sample_count": result.downstream_impact.sample_count,
+            "insufficient_evidence": result.downstream_impact.insufficient_evidence,
+        },
+    }

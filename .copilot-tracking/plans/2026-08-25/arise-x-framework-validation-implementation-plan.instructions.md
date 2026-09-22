@@ -85,78 +85,78 @@ Evolve the current synthetic ARISE-X scaffold into an evidence-first agent relia
 
 Reopened on 2026-09-09 after the [acceptance audit](../../research/subagents/2026-09-09/phase-completion-audit.md). Existing passing tests do not establish full phase acceptance. Preserve implemented behavior while repairing confirmed gaps. User authorized verification and in-scope repairs; architectural changes require bounded design decisions. WI-01 through WI-08 remain deferred.
 
-### [ ] Implementation Phase 0: Scenario And Persistence Contracts
+### [x] Implementation Phase 0: Scenario And Persistence Contracts
 
 <!-- parallelizable: true -->
 
-* [ ] Step 0.1: Add PyYAML/runtime and httpx/development dependencies, then create typed scenario configuration with runtime environment precedence.
+* [x] Step 0.1: Add PyYAML/runtime and httpx/development dependencies, then create typed scenario configuration with runtime environment precedence.
   * Details: .copilot-tracking/details/2026-08-25/arise-x-framework-validation-implementation-details.md (Lines 39-79)
-* [ ] Step 0.2: Add schema-versioned run persistence with immutable run IDs, typed read/list/lookup operations, and legacy write compatibility.
+* [x] Step 0.2: Add schema-versioned run persistence with immutable run IDs, typed read/list/lookup operations, and legacy write compatibility.
   * Details: .copilot-tracking/details/2026-08-25/arise-x-framework-validation-implementation-details.md (Lines 80-109)
-* [ ] Step 0.3: Validate the two independent contract tracks with focused pytest and Ruff checks.
+* [x] Step 0.3: Validate the two independent contract tracks with focused pytest and Ruff checks.
   * Details: .copilot-tracking/details/2026-08-25/arise-x-framework-validation-implementation-details.md (Lines 110-119)
 
-### [ ] Implementation Phase 1: Deterministic Single-Agent Execution
+### [x] Implementation Phase 1: Deterministic Single-Agent Execution
 
 <!-- parallelizable: false -->
 
-* [ ] Step 1.1: Replace `_simulate_event` with an injected `AgentUnderTest`, deterministic scripted adapter, scenario, and seeded random source while preserving positional runner behavior.
+* [x] Step 1.1: Replace `_simulate_event` with an injected `AgentUnderTest`, deterministic scripted adapter, scenario, and seeded random source while preserving positional runner behavior.
   * Details: .copilot-tracking/details/2026-08-25/arise-x-framework-validation-implementation-details.md (Lines 124-165)
-* [ ] Step 1.2: Persist and expose deterministic run metadata consistently through the runner, repository, CLI, and API.
+* [x] Step 1.2: Persist and expose deterministic run metadata consistently through the runner, repository, CLI, and API.
   * Details: .copilot-tracking/details/2026-08-25/arise-x-framework-validation-implementation-details.md (Lines 166-194)
-* [ ] Step 1.3: Validate agent invocation, replay determinism, metadata, compatibility keys, lint, and CLI smoke behavior.
+* [x] Step 1.3: Validate agent invocation, replay determinism, metadata, compatibility keys, lint, and CLI smoke behavior.
   * Details: .copilot-tracking/details/2026-08-25/arise-x-framework-validation-implementation-details.md (Lines 195-202)
 
-### [ ] Implementation Phase 2: Trajectory And Reliability Contracts
+### [x] Implementation Phase 2: Trajectory And Reliability Contracts
 
 <!-- parallelizable: true -->
 
-* [ ] Step 2.1: Define immutable trajectory, step, tool, state, recovery, outcome, redaction, and correlation evidence while retaining `RunEvent` as a projection.
+* [x] Step 2.1: Define immutable trajectory, step, tool, state, recovery, outcome, redaction, and correlation evidence while retaining `RunEvent` as a projection.
   * Details: .copilot-tracking/details/2026-08-25/arise-x-framework-validation-implementation-details.md (Lines 209-241)
-* [ ] Step 2.2: Define the eight-dimension Agent Reliability Vector with evidence coverage and normalization metadata; keep additive trust diagnostic only.
+* [x] Step 2.2: Define the eight-dimension Agent Reliability Vector with evidence coverage and normalization metadata; keep additive trust diagnostic only.
   * Details: .copilot-tracking/details/2026-08-25/arise-x-framework-validation-implementation-details.md (Lines 242-275)
 * [x] Step 2.3: Validate both independent contracts and compatibility with focused pytest and Ruff checks.
   * Details: .copilot-tracking/details/2026-08-25/arise-x-framework-validation-implementation-details.md (Lines 276-282)
 
-### [ ] Implementation Phase 3: Trajectory And Vector Integration
+### [x] Implementation Phase 3: Trajectory And Vector Integration
 
 <!-- parallelizable: false -->
 
-* [ ] Step 3.1: Produce trajectories, summary events, and vector dimensions from real agent execution without fabricating behavioral stability from one run.
+* [x] Step 3.1: Produce trajectories, summary events, and vector dimensions from real agent execution without fabricating behavioral stability from one run.
   * Details: .copilot-tracking/details/2026-08-25/arise-x-framework-validation-implementation-details.md (Lines 287-320)
-* [ ] Step 3.2: Persist and expose versioned trajectory/vector evidence with bounded default API responses and explicit detailed access.
+* [x] Step 3.2: Persist and expose versioned trajectory/vector evidence with bounded default API responses and explicit detailed access.
   * Details: .copilot-tracking/details/2026-08-25/arise-x-framework-validation-implementation-details.md (Lines 321-349)
-* [ ] Step 3.3: Update README.md and docs/architecture.md to the tested seven-plane target and trajectory/vector flow without claiming future features.
+* [x] Step 3.3: Update README.md and docs/architecture.md to the tested seven-plane target and trajectory/vector flow without claiming future features.
   * Details: .copilot-tracking/details/2026-08-25/arise-x-framework-validation-implementation-details.md (Lines 350-373)
-* [ ] Step 3.4: Validate integrated evidence, persistence, compatibility, documentation commands, lint, and CLI output.
+* [x] Step 3.4: Validate integrated evidence, persistence, compatibility, documentation commands, lint, and CLI output.
   * Details: .copilot-tracking/details/2026-08-25/arise-x-framework-validation-implementation-details.md (Lines 374-381)
 
-### [ ] Implementation Phase 4: Verified Chaos Catalog
+### [x] Implementation Phase 4: Verified Chaos Catalog
 
 <!-- parallelizable: false -->
 
-* [ ] Step 4.1: Define typed Levels 1-4 fault contracts, cross-cutting cost/adversarial/human families, abort conditions, blast radius, and trigger receipts.
+* [x] Step 4.1: Define typed Levels 1-4 fault contracts, cross-cutting cost/adversarial/human families, abort conditions, blast radius, and trigger receipts.
   * Details: .copilot-tracking/details/2026-08-25/arise-x-framework-validation-implementation-details.md (Lines 388-421)
-* [ ] Step 4.2: Dispatch faults at explicit injection points and score resilience/recovery only for verified triggers correlated to trajectories.
+* [x] Step 4.2: Dispatch faults at explicit injection points and score resilience/recovery only for verified triggers correlated to trajectories.
   * Details: .copilot-tracking/details/2026-08-25/arise-x-framework-validation-implementation-details.md (Lines 422-450)
-* [ ] Step 4.3: Document only implemented fault levels, cross-cutting families, receipt semantics, and deferred model/multi-agent behavior.
+* [x] Step 4.3: Document only implemented fault levels, cross-cutting families, receipt semantics, and deferred model/multi-agent behavior.
   * Details: .copilot-tracking/details/2026-08-25/arise-x-framework-validation-implementation-details.md (Lines 451-466)
-* [ ] Step 4.4: Validate trigger, recovery, abort, replay, control/experiment pairing, metrics, and lint.
+* [x] Step 4.4: Validate trigger, recovery, abort, replay, control/experiment pairing, metrics, and lint.
   * Details: .copilot-tracking/details/2026-08-25/arise-x-framework-validation-implementation-details.md (Lines 467-473)
 
-### [ ] Implementation Phase 5: Statistical Drift And Release Gate
+### [x] Implementation Phase 5: Statistical Drift And Release Gate
 
 <!-- parallelizable: false -->
 
-* [ ] Step 5.1: Implement powered, cluster-aware, per-dimension paired statistics with corrected significance, practical effects, impact priority, and insufficient-evidence states.
+* [x] Step 5.1: Implement powered, cluster-aware, per-dimension paired statistics with corrected significance, practical effects, impact priority, and insufficient-evidence states.
   * Details: .copilot-tracking/details/2026-08-25/arise-x-framework-validation-implementation-details.md (Lines 480-524)
-* [ ] Step 5.2: Define a vector-first release policy with geometric ARI, critical overrides, held-out/power fail-safe behavior, and an explicit episode SLI/error-budget formula.
+* [x] Step 5.2: Define a vector-first release policy with geometric ARI, critical overrides, held-out/power fail-safe behavior, and an explicit episode SLI/error-budget formula.
   * Details: .copilot-tracking/details/2026-08-25/arise-x-framework-validation-implementation-details.md (Lines 525-563)
-* [ ] Step 5.3: Add immutable-run baseline/candidate gate interfaces with held-out-suite enforcement, HTTP contract tests, stable CI exits, and persisted rationale.
+* [x] Step 5.3: Add immutable-run baseline/candidate gate interfaces with held-out-suite enforcement, HTTP contract tests, stable CI exits, and persisted rationale.
   * Details: .copilot-tracking/details/2026-08-25/arise-x-framework-validation-implementation-details.md (Lines 564-597)
-* [ ] Step 5.4: Document drift evidence, gate semantics, compatibility behavior, and the calibration limits of bundled example thresholds.
+* [x] Step 5.4: Document drift evidence, gate semantics, compatibility behavior, and the calibration limits of bundled example thresholds.
   * Details: .copilot-tracking/details/2026-08-25/arise-x-framework-validation-implementation-details.md (Lines 598-614)
-* [ ] Step 5.5: Validate SciPy resolution, statistical classifications, critical/no-data policy, persistence, integration, lint, and gate smoke behavior.
+* [x] Step 5.5: Validate SciPy resolution, statistical classifications, critical/no-data policy, persistence, integration, lint, and gate smoke behavior.
   * Details: .copilot-tracking/details/2026-08-25/arise-x-framework-validation-implementation-details.md (Lines 615-623)
 
 ### [ ] Implementation Phase 6: Multi-Agent Execution And MACS
@@ -187,7 +187,7 @@ Reopened on 2026-09-09 after the [acceptance audit](../../research/subagents/202
 
 ### Completed bounded repair checkpoints 2026-09-09
 
-* [x] R0: Repair exclusive run persistence, ID confinement, legacy listing and existing-schema evidence alignment; add regression tests. Original Steps 0.1-0.3 remain partial for unresolved configuration/governance and acceptance requirements.
+* [x] R0: Repair exclusive run persistence, ID confinement, legacy listing and existing-schema evidence alignment; complete configuration governance, protected held-out resolution and focused acceptance validation.
 * [x] R5: Repair fail-closed gate coverage, comparability, independent-budget requirements and transport errors; add real HTTP regression tests. Original Phase 5 remains partial for power methodology, production inputs and immutable decisions.
 * [x] R7: Validate the repaired slice with 377 passing tests, 8 Windows symlink skips, clean Ruff, staged dependency sync/build, installed-wheel imports and CLI/API block/error smoke. This does not satisfy missing original roadmap behavior or prove production statistical validity.
 

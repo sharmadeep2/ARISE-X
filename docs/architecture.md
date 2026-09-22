@@ -2,7 +2,7 @@
 title: ARISE-X Architecture
 description: High-level architecture for ARISE-X reliability experimentation
 author: ARISE-X Team
-ms.date: 2026-08-27
+ms.date: 2026-09-22
 ms.topic: reference
 keywords:
   - architecture
@@ -13,78 +13,119 @@ estimated_reading_time: 4
 
 ## System View
 
-ARISE-X targets a seven-plane architecture. Each plane below is marked
-Implemented (real, tested code exists today), Partial (a slice exists but
-the plane's full scope is not built), or Planned (no implementation yet).
+ARISE-X targets a seven-plane architecture. Implemented means an executable,
+tested product contract exists. Partial means code exists but does not yet
+satisfy the plane's production or integration contract.
 
 * Scenario Plane (Implemented): typed, versioned business scenarios and
   evaluation-suite manifests (`scenarios/`, `config.py`) define the
   procurement objective, constraints, disruption references, thresholds,
-  seed, and task-family clusters used to run and gate an episode.
+  seed, and task-family clusters. Loop-generated tasks currently carry the
+  development partition identity and are not selected from protected
+  held-out payloads.
 * Agent Execution Plane (Partial): a deterministic, provider-neutral
   scripted agent (`agents/`) implements the minimum `AgentUnderTest`
-  protocol. Tool use, retrieval, memory, and multi-agent coordination are
-  not built.
+  protocol. Optional measurements can be supplied through `AgentResponse`
+  without requiring an external SDK or tool runtime. Star-topology
+  coordination code exists, but it is not integrated into the product API,
+  CLI, or durable run contract.
 * Chaos Plane (Partial): a typed fault catalog (`chaos/catalog.py`) defines
-  four primary levels - Infrastructure, Tool, Data, Agent - plus three
-  cross-cutting families - Cost, Security/Adversarial, Human-in-the-loop -
-  that apply across levels instead of being modeled as a separate level.
-  Only three cataloged faults are actually dispatched today:
-  `baseline` and `latency_spike` (Infrastructure) and `tool_degradation`
-  (Tool), all still driven by the pre-existing probability-boost/latency
-  model. `chaos/injector.py`'s `dispatch_fault` samples whether a fault
-  fires and additionally verifies the sample actually caused an observable
-  effect versus a fault-free control response, rather than crediting a
-  fault's configured probability alone (AgentChaos's trigger-verification
-  methodology); `evaluation/runner.py` also exposes
-  `run_control_and_experiment` to pair a no-fault control execution with a
-  faulted experiment execution for the same task. Every Data- and
-  Agent-level fault, and the Cost/Security-Adversarial/Human-in-the-loop
-  families, are real, correctly classified catalog entries cataloged for
-  future dispatch: they have no runtime sampling logic yet because the
-  runner still builds exactly one step per task and has no tool-call or
-  multi-step pipeline to inject them against. Level 5 (Multi-Agent) and
-  Level 6 (Model) remain fully deferred to later phases.
+  Infrastructure, Tool, Data, and Agent levels plus Cost,
+  Security/Adversarial, and Human-in-the-loop cross-cutting families. The
+  deterministic scripted adapter implements one bounded local fault at each
+  of the four primary levels. Faults are prepared before execution at an
+  explicit injection point and verified only from a matching observed effect.
+  Receipts record trigger, observation, recovery, abort, blast-radius, and
+  control-pair provenance. Other catalog entries remain unsupported at
+  runtime, and cross-cutting families do not constitute exhaustive security
+  testing. Level 5 durable multi-agent fault integration and Level 6 provider
+  or model experiments remain deferred.
 * Telemetry Plane (Implemented): every task execution produces an
   immutable, correlated `Trajectory` (`telemetry/trajectory.py`) capturing
-  state transitions, tool calls, faults, recovery, and usage; `RunEvent`
-  (`telemetry/events.py`) remains a flat compatibility projection for the
-  drift and trust layers.
-* Intelligence Plane (Planned): drift detection today (`drift/detector.py`)
-  is a heuristic score from a single flat event, not the statistical,
-  baseline-aware drift detection or failure classification/root-cause
-  analysis the plane targets.
+  state transitions, fault and recovery evidence, usage, and explicit
+  content-redaction markers. Exactly one `RunEvent` compatibility projection
+  is retained beside each trajectory and vector. Raw prompt, output, tool
+  payload, and tool response content is not persisted.
+* Intelligence Plane (Implemented): `drift/detector.py` preserves the legacy
+  per-event heuristic, while `drift/statistics.py` owns the release comparison
+  contract. It validates paired task identity, reports coverage and confidence,
+  derives required observations and achieved power, applies cluster-aware
+  paired permutation inference for correlated task families, and corrects
+  dimension-level significance with Holm-Bonferroni. Numeric policy values
+  remain illustrative until calibrated against representative evidence.
 * Reliability Plane (Partial): the Agent Reliability Vector
   (`trust/vector.py`) reports goal success, resilience, recovery, safety,
-  efficiency, cost, and autonomy per task from trajectory evidence.
-  `behavioral_stability` is always reported unavailable because no
-  historical baseline exists yet, and the gating Agent Reliability Index is
-  not computed. The additive `score_trust` (`trust/scorer.py`) remains a
-  temporary diagnostic compatibility projection, not the primary artifact.
-* CI/CD + Production Plane (Planned): release-gating policy, regression
-  comparison against a golden baseline, and continuous production
-  monitoring are not built; `storage/repository.py` persists versioned run
-  evidence but does not gate deployments.
+  efficiency, cost, and autonomy per task from specific trajectory evidence
+  references. Behavioral stability is explicitly unavailable for a single
+  run. Resilience and recovery are unavailable without verified fault
+  evidence. The additive `score_trust` remains a compatibility diagnostic,
+  not the primary vector or a release decision.
+* CI/CD + Production Plane (Partial): `trust/gate.py` implements a shared gate
+  service for the API and CLI, fail-closed required evidence, critical-metric
+  overrides, geometric ARI, and an independent trailing production error
+  budget. `storage/repository.py` persists versioned immutable decisions with
+  policy, suite, statistical rationale, window, and budget snapshots. Automatic
+  deployment enforcement, calibrated production thresholds, and provenance
+  attestation beyond distinct immutable run identity remain deferred, so a
+  gate verdict is not standalone deployment authorization.
 
 ## Data Flow
 
 1. The evaluation runner (`evaluation/runner.py`) resolves a scenario and
-   agent, then executes each task through the agent under a chosen
-   disruption profile using a seeded random source.
-2. Each task's execution evidence, including the agent's response and the
-   catalog fault dispatch's trigger-verification outcome, is captured as an
-   ordered `Trajectory` (its `FaultTrigger` step evidence records the
-   catalog `fault_id` and whether the trigger was verified) and projected
-   into a compatibility `RunEvent`.
-3. The drift layer computes a drift score and verdict from the projected
+  agent, prepares the selected bounded local fault before its injection point,
+  and executes isolated control/experiment agent instances when required.
+2. The adapter reports a typed observation from the injection point. The
+  injector verifies the receipt, executes abort policy, and records recovery
+  without inferring effects from probability or control success alone.
+3. Each task produces one ordered, redacted `Trajectory`, one derived
+  compatibility `RunEvent`, and one `ReliabilityVector` under the same task
+  and run correlation identifiers.
+4. The drift layer computes a drift score and verdict from the projected
    event; the trust layer computes a diagnostic trust score and pass/fail
    status from the same event.
-4. The runner derives a per-task `ReliabilityVector` from the trajectory's
-   outcome, fault, timing, and usage evidence.
-5. `storage/repository.py` persists the run's metadata, iteration results,
-   trajectories, and vectors together under one schema-versioned envelope,
-   retrievable by an immutable run ID.
-6. Results are exposed through the CLI (`main.py`) and API (`api/app.py`):
-   both report the run ID and a bounded reliability-vector summary, and the
-   API additionally exposes full trajectory/vector detail through an
-   explicit, opt-in `GET /runs/{run_id}` endpoint.
+5. The runner derives each available vector dimension from explicit outcome,
+  recovery, policy-violation, usage, or intervention references. No transport
+  or repository computes scores.
+6. `storage/repository.py` validates and persists metadata, iteration results,
+  compatibility events, trajectories, and vectors under one strict
+  schema-versioned envelope. Incompatible older schemas are rejected, and
+  immutable run identifiers address the artifacts.
+7. `trust/gate.py` validates paired held-out baseline and candidate records,
+  runs per-dimension statistical comparisons, and evaluates critical
+  regressions and required evidence without consuming production history.
+8. A separate production-history run supplies timestamped episode outcomes.
+  The service selects the configured trailing window and computes the exact
+  fractional error budget before combining it with candidate evidence.
+9. The gate service fingerprints policy and suite snapshots, derives a stable
+  decision identity, and writes one immutable decision under `decisions/`.
+  Repeated evaluation with the same inputs returns that persisted decision.
+10. Results are exposed through the CLI (`main.py`) and API (`api/app.py`):
+  the CLI prints the persisted run ID and a bounded vector summary;
+  `POST /run` preserves legacy keys and bounded vector summaries; and
+  `GET /runs/{run_id}` explicitly returns redacted event, trajectory, and
+  vector detail. Both `arise-x gate` and `POST /gate` delegate to the same
+  service and return the same decision identity and rationale.
+
+## Release Decision Boundary
+
+The release path separates three evidence classes:
+
+* Baseline and candidate runs provide paired held-out reliability vectors
+* The versioned policy and evaluation suite define required dimensions,
+  statistical thresholds, clusters, critical metrics, SLI, and budget window
+* A different immutable run provides production episode outcomes for the
+  trailing error budget
+
+The persisted decision stores identifiers plus canonical policy and suite
+snapshots, their SHA-256 fingerprints, per-dimension rationale, categorized
+block or warning reasons, selected window inputs, and computed budget state.
+It does not store protected task payloads. Repository path confinement,
+symlink rejection, strict schema validation, and exclusive creation prevent a
+decision from being redirected or overwritten through the persistence API.
+
+## Multi-Agent Boundary
+
+`agents/multi_agent.py` and the in-memory multi-agent runner implement a
+star-topology experiment and diagnostic MACS components. They do not have a
+durable product API, CLI selector, or persistence schema. Multi-agent evidence
+therefore remains outside the current durable run contract.

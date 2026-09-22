@@ -7,22 +7,16 @@ from pathlib import Path
 
 import typer
 
-from arise_x.config import load_settings
-from arise_x.drift.statistics import (
-    DEFAULT_ALPHA,
-    DEFAULT_TARGET_POWER,
-    RunObservation,
-    compare_baseline_to_candidate,
-)
+from arise_x.config import ConfigurationError, load_settings
+from arise_x.drift.statistics import SamplingDesignError
 from arise_x.evaluation.runner import execute_and_persist_run
-from arise_x.storage.repository import RunNotFoundError, RunRecord, RunRepository, write_results
-from arise_x.trust.gate import (
-    CriticalMetricConfig,
-    GateOutcome,
-    aggregate_reliability,
-    default_dimension_configs,
-    evaluate_release,
+from arise_x.storage.repository import (
+    RepositoryError,
+    RunNotFoundError,
+    RunRepository,
+    write_results,
 )
+from arise_x.trust.gate import GateService, HeldOutSuiteError
 from arise_x.trust.vector import DimensionScore, VectorDimension
 
 EXIT_SUCCESS = 0
@@ -46,21 +40,17 @@ _BASELINE_RUN_ID_OPTION = typer.Option(
 _CANDIDATE_RUN_ID_OPTION = typer.Option(
     ..., "--candidate-run-id", help="Immutable run ID of the candidate being gated."
 )
+_PRODUCTION_HISTORY_RUN_ID_OPTION = typer.Option(
+    None,
+    "--production-history-run-id",
+    help="Immutable run ID containing independent production episodes.",
+)
 
 
 def _format_dimension(score: DimensionScore) -> str:
     """Format a dimension score for terse CLI output; unavailable dimensions print as "n/a"."""
 
     return f"{score.value:.2f}" if score.available else "n/a"
-
-
-def _build_observations(record: RunRecord) -> list[RunObservation]:
-    """Pair a persisted run's trajectories and reliability vectors into RunObservation evidence."""
-
-    return [
-        RunObservation(trajectory=trajectory, vector=vector)
-        for trajectory, vector in zip(record.trajectories, record.vectors, strict=True)
-    ]
 
 
 @app.command("run-loop")
@@ -80,6 +70,13 @@ def run_loop(
 
     trustworthy = sum(1 for result in outcome.results if result.trustworthy)
     typer.echo(f"Run ID: {outcome.run_id}")
+    typer.echo(f"Scenario: {outcome.scenario_version}")
+    typer.echo(f"Agent: {outcome.agent_version}")
+    typer.echo(f"Seed: {outcome.seed}")
+    typer.echo(f"Configuration fingerprint: {outcome.config_fingerprint}")
+    typer.echo(
+        f"Thresholds: trust={outcome.trust_threshold}, drift={outcome.drift_threshold}"
+    )
     typer.echo(f"Saved {len(outcome.results)} iterations to {report_path}")
     typer.echo(f"Trustworthy runs: {trustworthy}/{len(outcome.results)}")
     if outcome.vectors:
@@ -95,6 +92,7 @@ def run_loop(
 def gate(
     baseline_run_id: str = _BASELINE_RUN_ID_OPTION,
     candidate_run_id: str = _CANDIDATE_RUN_ID_OPTION,
+    production_history_run_id: str | None = _PRODUCTION_HISTORY_RUN_ID_OPTION,
     scenario_path: Path | None = _SCENARIO_OPTION,
 ) -> None:
     """Compare a baseline and candidate run and print a release-gate verdict.
@@ -111,73 +109,58 @@ def gate(
     evaluate this comparison".
     """
 
-    settings = load_settings(experiment_path=scenario_path) if scenario_path else load_settings()
-    repository = RunRepository(settings.output_dir)
-
     try:
-        baseline_record = repository.read_run(baseline_run_id)
-        candidate_record = repository.read_run(candidate_run_id)
+        settings = (
+            load_settings(experiment_path=scenario_path)
+            if scenario_path
+            else load_settings()
+        )
+        service = GateService(
+            RunRepository(settings.output_dir),
+            scenario=settings.scenario,
+            suite=settings.evaluation_suite,
+            policy=settings.gate_policy,
+        )
+        decision = service.evaluate(
+            baseline_run_id,
+            candidate_run_id,
+            production_history_run_id=production_history_run_id,
+        )
     except RunNotFoundError as error:
-        typer.echo(f"Configuration error: {error}", err=True)
+        typer.echo("Gate input run was not found.", err=True)
+        raise typer.Exit(code=EXIT_CONFIGURATION_ERROR) from error
+    except (
+        ConfigurationError,
+        RepositoryError,
+        SamplingDesignError,
+        HeldOutSuiteError,
+        ValueError,
+    ) as error:
+        typer.echo("Gate evidence or configuration is invalid.", err=True)
         raise typer.Exit(code=EXIT_CONFIGURATION_ERROR) from error
 
-    baseline_observations = _build_observations(baseline_record)
-    candidate_observations = _build_observations(candidate_record)
-
-    dimension_configs = default_dimension_configs(settings.scenario)
-    alpha = DEFAULT_ALPHA
-    target_power = DEFAULT_TARGET_POWER
-    critical_config = CriticalMetricConfig()
-    if settings.gate_policy is not None:
-        dimension_configs.update(settings.gate_policy.dimension_config_map())
-        alpha = settings.gate_policy.alpha
-        target_power = settings.gate_policy.target_power
-        critical_config = settings.gate_policy.critical_metric_config()
-
-    drift = compare_baseline_to_candidate(
-        baseline_run_id,
-        candidate_run_id,
-        baseline_observations,
-        candidate_observations,
-        dimension_configs,
-        alpha=alpha,
-        target_power=target_power,
-    )
-
-    evidence_partitions = {
-        observation.trajectory.suite_partition
-        for observation in (*baseline_observations, *candidate_observations)
-    }
-    candidate_vectors = [observation.vector for observation in candidate_observations]
-    ari_source = aggregate_reliability(candidate_vectors) if candidate_vectors else None
-
-    verdict = evaluate_release(
-        drift,
-        scenario=settings.scenario,
-        suite=settings.evaluation_suite,
-        evidence_partitions=evidence_partitions,
-        critical_config=critical_config,
-        ari_source=ari_source,
-    )
-
-    for result in drift.dimension_results:
+    for result in decision.dimension_rationale:
         typer.echo(
-            f"{result.dimension.value}: effect_size={result.effect_size}, "
-            f"significant={result.significant}, material_drift={result.material_drift}, "
-            f"has_sufficient_data={result.has_sufficient_data}"
+            f"{result['dimension']}: effect_size={result['effect_size']}, "
+            f"significant={result['significant']}, "
+            f"material_drift={result['material_drift']}, "
+            f"has_sufficient_data={result['has_sufficient_data']}"
         )
-    typer.echo(f"Agent Reliability Index (geometric): {verdict.geometric_ari}")
-    for reason in verdict.critical_override_reasons:
+    typer.echo(f"Decision ID: {decision.decision_id}")
+    typer.echo(f"Agent Reliability Index (geometric): {decision.geometric_ari}")
+    for reason in decision.critical_override_reasons:
         typer.echo(f"CRITICAL: {reason}")
-    for reason in verdict.held_out_suite_reasons:
+    for reason in decision.held_out_suite_reasons:
         typer.echo(f"HELD-OUT SUITE: {reason}")
-    for reason in verdict.non_critical_warning_reasons:
+    for reason in decision.required_evidence_reasons:
+        typer.echo(f"EVIDENCE: {reason}")
+    for reason in decision.error_budget_reasons:
+        typer.echo(f"PRODUCTION BUDGET: {reason}")
+    for reason in decision.non_critical_warning_reasons:
         typer.echo(f"WARN: {reason}")
-    typer.echo(f"Verdict: {verdict.outcome.value}")
+    typer.echo(f"Verdict: {decision.verdict}")
 
-    if verdict.held_out_suite_reasons:
-        raise typer.Exit(code=EXIT_CONFIGURATION_ERROR)
-    if verdict.outcome is GateOutcome.BLOCK:
+    if decision.verdict == "block":
         raise typer.Exit(code=EXIT_FAILURE)
     raise typer.Exit(code=EXIT_SUCCESS)
 

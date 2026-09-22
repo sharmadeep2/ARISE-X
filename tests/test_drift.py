@@ -26,8 +26,32 @@ from arise_x.drift.statistics import (
     compare_dimension,
     holm_bonferroni_correction,
 )
-from arise_x.telemetry.trajectory import Outcome, Step, Trajectory
-from arise_x.trust.vector import DimensionScore, ReliabilityVector, VectorDimension
+from arise_x.telemetry.trajectory import Outcome, OutcomeStatus, Step, Trajectory
+from arise_x.trust.vector import (
+    ConfidenceMetadata,
+    DimensionScore,
+    ReliabilityVector,
+    VectorDimension,
+)
+
+
+def _score(
+    dimension: VectorDimension,
+    value: float,
+    *,
+    available: bool = True,
+) -> DimensionScore:
+    if not available:
+        return DimensionScore.unavailable(dimension, evidence_total=1)
+    return DimensionScore(
+        dimension=dimension,
+        value=value,
+        available=True,
+        evidence_count=1,
+        evidence_total=1,
+        confidence=ConfidenceMetadata(score=1.0, method="fixture_observation"),
+        evidence_references=(f"fixture:{dimension.value}",),
+    )
 
 
 def _trajectory(
@@ -53,16 +77,20 @@ def _trajectory(
         agent_id="agent-1",
         agent_version="v1",
         steps=(step,),
-        outcome=Outcome(goal_achieved=goal_achieved, label="done" if goal_achieved else "failed"),
+        outcome=Outcome(
+            goal_achieved=goal_achieved,
+            label="done" if goal_achieved else "failed",
+            status=OutcomeStatus.SUCCEEDED if goal_achieved else OutcomeStatus.FAILED,
+            terminal_state="done",
+            evidence_references=(f"fixture:{task_id}:outcome",),
+        ),
         policy_violation_count=policy_violations,
     )
 
 
 def _vector_with(values: dict[VectorDimension, float]) -> ReliabilityVector:
     scores = {
-        dim.value: DimensionScore(
-            dimension=dim, value=values.get(dim, 0.5), available=True, evidence_count=1
-        )
+        dim.value: _score(dim, values.get(dim, 0.5))
         for dim in VectorDimension
     }
     return ReliabilityVector(**scores)
@@ -106,12 +134,10 @@ def _observation(
         policy_violations=policy_violations,
     )
     scores = {
-        dim.value: DimensionScore(dimension=dim, value=0.5, available=True, evidence_count=1)
+        dim.value: _score(dim, 0.5)
         for dim in VectorDimension
     }
-    scores[dimension.value] = DimensionScore(
-        dimension=dimension, value=value, available=available, evidence_count=1
-    )
+    scores[dimension.value] = _score(dimension, value, available=available)
     return RunObservation(trajectory=trajectory, vector=ReliabilityVector(**scores))
 
 
@@ -193,7 +219,8 @@ def test_given_large_consistent_difference_when_compare_dimension_then_material_
     assert result.significant is True
     assert result.material_drift is True
     assert result.test_method == DriftTestMethod.WILCOXON_SIGNED_RANK
-    assert result.insufficient_power is False
+    assert result.insufficient_power is True
+    assert result.cluster_sufficient is False
 
 
 def test_given_wilcoxon_raises_when_compare_dimension_then_falls_back_to_permutation(
@@ -229,10 +256,10 @@ def test_given_one_pair_per_task_binary_when_compare_dimension_then_selects_exac
     baseline_values = [1.0] * 10
     candidate_values = [1.0] * 7 + [0.0] * 3
     baseline = [
-        _observation(f"task-{i}", "cluster-a", dimension, baseline_values[i]) for i in range(10)
+        _observation(f"task-{i}", f"cluster-{i}", dimension, baseline_values[i]) for i in range(10)
     ]
     candidate = [
-        _observation(f"task-{i}", "cluster-a", dimension, candidate_values[i]) for i in range(10)
+        _observation(f"task-{i}", f"cluster-{i}", dimension, candidate_values[i]) for i in range(10)
     ]
     config = DimensionTestConfig(minimum_detectable_effect=0.1, tolerance=0.1, is_binary=True)
 
@@ -331,7 +358,10 @@ def test_given_correlated_clusters_when_compare_dimension_then_cluster_ci_wider_
 
     # Assert
     assert clustered_result.effective_cluster_count == 2
+    assert clustered_result.power_analysis_unit == "cluster"
+    assert clustered_result.cluster_sufficient is True
     assert naive_result.effective_cluster_count == 20
+    assert naive_result.power_analysis_unit == "task"
     assert clustered_result.confidence_interval is not None
     assert naive_result.confidence_interval is not None
     clustered_low, clustered_high = clustered_result.confidence_interval
@@ -555,21 +585,33 @@ def test_given_incompatible_observations_when_compare_then_rejected(change: str)
     observation = _observation("t1", "c1", VectorDimension.SAFETY, 1.0)
     baseline = [observation]
     candidate = [observation]
-    if change == "schema":
-        candidate = [replace(observation, vector=replace(observation.vector, schema_version="v2"))]
-    elif change == "normalization":
-        score = replace(observation.vector.safety, normalization_version="v2")
-        candidate = [replace(observation, vector=replace(observation.vector, safety=score))]
-    elif change == "duplicate":
-        baseline *= 2
-        candidate *= 2
-    else:
-        baseline.append(replace(observation, trajectory=replace(
-            observation.trajectory, repeat_id="seed-1"
-        )))
-
     # Act & Assert
-    with pytest.raises(SamplingDesignError):
+    with pytest.raises((SamplingDesignError, ValueError)):
+        if change == "schema":
+            candidate = [
+                replace(
+                    observation,
+                    vector=replace(observation.vector, schema_version="v2"),
+                )
+            ]
+        elif change == "normalization":
+            score = replace(observation.vector.safety, normalization_version="v2")
+            candidate = [
+                replace(
+                    observation,
+                    vector=replace(observation.vector, safety=score),
+                )
+            ]
+        elif change == "duplicate":
+            baseline *= 2
+            candidate *= 2
+        else:
+            baseline.append(
+                replace(
+                    observation,
+                    trajectory=replace(observation.trajectory, repeat_id="seed-1"),
+                )
+            )
         compare_dimension(
             VectorDimension.SAFETY, baseline, candidate, DimensionTestConfig(0.1, 0.05)
         )
@@ -592,14 +634,17 @@ def test_given_nonbinary_observed_values_when_binary_comparison_then_rejected(re
         )
 
 
-@pytest.mark.parametrize("missing", ["unavailable", "zero-count"])
-def test_given_incomplete_dimension_coverage_when_compare_then_insufficient(missing) -> None:
+def test_given_unavailable_dimension_when_compare_then_insufficient() -> None:
     # Arrange
     observations = [_observation(f"t{i}", f"c{i}", VectorDimension.SAFETY, 1.0) for i in range(3)]
-    score = replace(observations[0].vector.safety, evidence_count=0,
-                    available=missing != "unavailable")
-    candidate = [replace(observations[0], vector=replace(observations[0].vector, safety=score)),
-                 *observations[1:]]
+    score = DimensionScore.unavailable(VectorDimension.SAFETY, evidence_total=1)
+    candidate = [
+        replace(
+            observations[0],
+            vector=replace(observations[0].vector, safety=score),
+        ),
+        *observations[1:],
+    ]
 
     # Act
     result = compare_dimension(
@@ -608,6 +653,41 @@ def test_given_incomplete_dimension_coverage_when_compare_then_insufficient(miss
 
     # Assert
     assert result.has_sufficient_data is False
+    assert result.coverage == pytest.approx(2 / 3)
+
+
+def test_given_pilot_variance_when_compare_then_records_power_contract() -> None:
+    # Arrange
+    observations = [
+        _observation(f"t{i}", f"c{i}", VectorDimension.SAFETY, 1.0) for i in range(12)
+    ]
+    config = DimensionTestConfig(
+        0.1,
+        0.05,
+        pilot_standard_deviation=0.1,
+        minimum_cluster_count=3,
+    )
+
+    # Act
+    result = compare_dimension(
+        VectorDimension.SAFETY, observations, observations, config
+    )
+
+    # Assert
+    assert result.required_observations == 11
+    assert result.paired_task_count == 12
+    assert result.confidence_level == pytest.approx(0.98)
+    assert result.achieved_power >= result.target_power
+    assert result.coverage == 1.0
+
+
+def test_given_available_zero_evidence_when_construct_score_then_rejected() -> None:
+    # Arrange
+    observation = _observation("t1", "c1", VectorDimension.SAFETY, 1.0)
+
+    # Act & Assert
+    with pytest.raises(ValueError, match="positive evidence"):
+        replace(observation.vector.safety, evidence_count=0, evidence_references=())
 
 
 def test_given_development_pairs_when_compare_then_diagnostics_remain_available() -> None:

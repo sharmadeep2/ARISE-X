@@ -16,8 +16,20 @@ from arise_x.evaluation.runner import IterationResult
 from arise_x.main import app as cli_app
 from arise_x.scenarios import SuitePartition, SuiteTask
 from arise_x.storage.repository import RunRepository
-from arise_x.telemetry.trajectory import Outcome, Step, Trajectory
-from arise_x.trust.vector import DimensionScore, ReliabilityVector, VectorDimension
+from arise_x.telemetry.trajectory import (
+    ContentKind,
+    Outcome,
+    OutcomeStatus,
+    RedactedContent,
+    Step,
+    Trajectory,
+)
+from arise_x.trust.vector import (
+    ConfidenceMetadata,
+    DimensionScore,
+    ReliabilityVector,
+    VectorDimension,
+)
 
 client = TestClient(app)
 
@@ -66,6 +78,24 @@ def test_given_explicit_scenario_and_seed_when_post_run_then_returns_run_metadat
     assert "scenario_version" in body
     assert "config_fingerprint" in body
     assert "agent_version" in body
+    assert body["compatibility_event_count"] == 2
+    assert body["trust_threshold"] == pytest.approx(0.75)
+    assert body["drift_threshold"] == pytest.approx(0.3)
+    persisted = client.get(f"/runs/{body['run_id']}")
+    assert persisted.status_code == 200
+    assert persisted.json()["metadata"]["seed"] == 7
+
+
+def test_given_unknown_scenario_when_post_run_then_returns_422(tmp_path, monkeypatch) -> None:
+    # Arrange
+    monkeypatch.setenv("ARISE_OUTPUT_DIR", str(tmp_path / "artifacts"))
+
+    # Act
+    response = client.post("/run", json={"scenario": "unknown-scenario"})
+
+    # Assert
+    assert response.status_code == 422
+    assert "Unknown scenario" in response.json()["detail"]
 
 
 def test_given_same_seed_when_run_twice_then_results_match(tmp_path, monkeypatch) -> None:
@@ -114,6 +144,13 @@ def test_given_persisted_run_when_get_run_then_returns_trajectory_and_vector_det
     assert body["run_id"] == run_id
     assert len(body["trajectories"]) == 1
     assert len(body["vectors"]) == 1
+    assert len(body["events"]) == 1
+    prompt_marker = body["trajectories"][0]["steps"][0]["prompt_text"]
+    output_marker = body["trajectories"][0]["steps"][0]["output_text"]
+    assert prompt_marker["marker"] == "redacted"
+    assert output_marker["marker"] == "redacted"
+    assert set(prompt_marker) == {"kind", "reference_id", "marker"}
+    assert set(output_marker) == {"kind", "reference_id", "marker"}
 
 
 def test_given_unknown_run_id_when_get_run_then_returns_404(tmp_path, monkeypatch) -> None:
@@ -132,7 +169,16 @@ def gate_runs(tmp_path, monkeypatch):
     """Persist structurally valid evidence through the repaired repository, not a read mock."""
     monkeypatch.setenv("ARISE_OUTPUT_DIR", str(tmp_path))
     settings = load_settings()
-    tasks = tuple(SuiteTask(f"held-{i}", "procurement", f"cluster-{i % 2}") for i in range(20))
+    tasks = tuple(
+        SuiteTask(
+            f"held-{i}",
+            "procurement",
+            f"cluster-{i}",
+            fingerprint="sha256:" + f"{i:064x}",
+            seed=7,
+        )
+        for i in range(40)
+    )
     suite = replace(settings.evaluation_suite, partitions=(
         settings.evaluation_suite.partition("development"),
         SuitePartition("held_out", "test", tasks),
@@ -154,9 +200,22 @@ def gate_runs(tmp_path, monkeypatch):
                 suite_id=suite.suite_id, suite_version=suite.version, suite_partition="held_out",
                 repeat_id="seed-7", scenario_name=settings.scenario.name, scenario_version=1,
                 agent_id="fixture", agent_version="v1",
-                steps=(Step(index=0, action="decide", state_transition="done",
-                            prompt_text="PRIVATE-GATE-SENTINEL"),),
-                outcome=Outcome(goal_achieved=True, label="done"),
+                steps=(Step(
+                    index=0,
+                    action="decide",
+                    state_transition="idle->done",
+                    prompt_text=RedactedContent(
+                        kind=ContentKind.PROMPT,
+                        reference_id=f"fixture:{run_id}:{task.task_id}:prompt",
+                    ),
+                ),),
+                outcome=Outcome(
+                    goal_achieved=True,
+                    label="done",
+                    status=OutcomeStatus.SUCCEEDED,
+                    terminal_state="done",
+                    evidence_references=(f"fixture:{run_id}:{task.task_id}:outcome",),
+                ),
             )
             if change in {"task_id", "repeat_id", "cluster_id", "suite_id", "scenario_name"}:
                 trajectory = replace(trajectory, **{change: f"other-{i}"})
@@ -166,13 +225,32 @@ def gate_runs(tmp_path, monkeypatch):
                 trajectory = replace(trajectory, suite_partition="development")
             elif change == "development":
                 trajectory = replace(trajectory, suite_partition="development")
-            scores = {dim.value: DimensionScore(dim, 1.0, True, 1) for dim in VectorDimension}
+            def score(dimension, value, *, task_id=task.task_id):
+                return DimensionScore(
+                    dimension=dimension,
+                    value=value,
+                    available=True,
+                    evidence_count=1,
+                    evidence_total=1,
+                    confidence=ConfidenceMetadata(
+                        score=1.0,
+                        method="fixture_observation",
+                    ),
+                    evidence_references=(
+                        f"fixture:{run_id}:{task_id}:{dimension.value}",
+                    ),
+                )
+
+            scores = {dim.value: score(dim, 1.0) for dim in VectorDimension}
             if change == "regression":
-                scores["goal_success"] = DimensionScore(VectorDimension.GOAL_SUCCESS, 0.0, True, 1)
+                scores["goal_success"] = score(VectorDimension.GOAL_SUCCESS, 0.0)
             elif change == "binary":
-                scores["goal_success"] = DimensionScore(VectorDimension.GOAL_SUCCESS, 0.7, True, 1)
+                scores["goal_success"] = score(VectorDimension.GOAL_SUCCESS, 0.7)
             elif change == "unavailable":
-                scores["efficiency"] = DimensionScore.unavailable(VectorDimension.EFFICIENCY)
+                scores["efficiency"] = DimensionScore.unavailable(
+                    VectorDimension.EFFICIENCY,
+                    evidence_total=1,
+                )
             trajectories.append(trajectory)
             vectors.append(ReliabilityVector(**scores))
             results.append(IterationResult(trajectory.task_id, "baseline", 0.0, 1.0, True))
@@ -196,7 +274,9 @@ def gate_runs(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("change", [None, "regression", "unavailable"])
-def test_given_valid_evidence_without_budget_when_http_gate_then_blocks(gate_runs, change) -> None:
+def test_given_valid_evidence_without_budget_when_http_gate_then_blocks(
+    gate_runs, tmp_path, change
+) -> None:
     # Arrange
     gate_runs("candidate", change)
 
@@ -211,6 +291,9 @@ def test_given_valid_evidence_without_budget_when_http_gate_then_blocks(gate_run
     assert body["verdict"] == "block"
     assert body["error_budget"] is None
     assert body["error_budget_reasons"]
+    assert body["decision_id"].startswith("gate-")
+    assert body["policy_fingerprint"].startswith("sha256:")
+    assert (tmp_path / "decisions" / f"{body['decision_id']}.json").is_file()
     assert "PRIVATE-GATE-SENTINEL" not in response.text
     assert "prompt_text" not in response.text
     if change == "regression":
@@ -350,3 +433,63 @@ def test_given_manifest_configuration_error_when_gate_transports_then_stable_err
     assert response.status_code == 422
     assert cli.exit_code == 2
     assert "PRIVATE-GATE-SENTINEL" not in response.text + cli.output
+
+
+def test_given_independent_production_history_when_gate_repeated_then_reuses_pass_decision(
+    gate_runs, tmp_path
+) -> None:
+    # Arrange
+    gate_runs("candidate")
+    gate_runs("production")
+    production_path = tmp_path / "production.json"
+    production_before = production_path.read_bytes()
+    payload = {
+        "baseline_run_id": "baseline",
+        "candidate_run_id": "candidate",
+        "production_history_run_id": "production",
+    }
+
+    # Act
+    first = client.post("/gate", json=payload)
+    second = client.post("/gate", json=payload)
+    cli = CliRunner().invoke(
+        cli_app,
+        [
+            "gate",
+            "--baseline-run-id",
+            "baseline",
+            "--candidate-run-id",
+            "candidate",
+            "--production-history-run-id",
+            "production",
+        ],
+    )
+
+    # Assert
+    assert first.status_code == second.status_code == 200
+    assert first.json()["verdict"] == "pass"
+    assert first.json()["decision_id"] == second.json()["decision_id"]
+    assert len(list((tmp_path / "decisions").glob("*.json"))) == 1
+    assert cli.exit_code == 0
+    assert first.json()["decision_id"] in cli.output
+    assert production_path.read_bytes() == production_before
+
+
+def test_given_candidate_as_production_history_when_gate_then_rejects_independence(
+    gate_runs,
+) -> None:
+    # Arrange
+    gate_runs("candidate")
+
+    # Act
+    response = client.post(
+        "/gate",
+        json={
+            "baseline_run_id": "baseline",
+            "candidate_run_id": "candidate",
+            "production_history_run_id": "candidate",
+        },
+    )
+
+    # Assert
+    assert response.status_code == 422

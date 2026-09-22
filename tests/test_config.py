@@ -3,11 +3,25 @@
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 from pathlib import Path
 
 import pytest
 
 from arise_x.config import ConfigurationError, load_settings
+from arise_x.scenarios import ScenarioValidationError
+
+_HELD_OUT_PAYLOAD = b"protected procurement task"
+_HELD_OUT_FINGERPRINT = f"sha256:{hashlib.sha256(_HELD_OUT_PAYLOAD).hexdigest()}"
+_DEVELOPMENT_TASK_YAML = (
+    "{task_id: procurement-dev-001, family: procurement, "
+    "cluster: vendor-comparison, seed: 101}"
+)
+_HELD_OUT_TASK_YAML = (
+    "{task_id: procurement-held-001, family: procurement, "
+    "cluster: vendor-comparison, seed: 201, "
+    f'fingerprint: "{_HELD_OUT_FINGERPRINT}"}}'
+)
 
 _VALID_EXPERIMENT_YAML = """\
 scenario:
@@ -35,28 +49,21 @@ scenario:
       family: procurement
 """
 
-_VALID_SUITE_YAML = """\
+_VALID_SUITE_YAML = f"""\
 suite:
-  suite_id: procurement-baseline-suite
-  version: 1
-  owner: arise-x-eval-team
-  rotation_deadline: "2099-12-31"
-  access_policy: restricted-eval-team-only
-  protected_payload_locator: "configs/protected/procurement-baseline-suite/held_out/"
-  partitions:
-    development:
-      description: Tuning-visible tasks.
-      tasks:
-        - task_id: procurement-dev-001
-          family: procurement
-          cluster: vendor-comparison
-    held_out:
-      description: Protected tasks.
-      tasks:
-        - task_id: procurement-held-001
-          family: procurement
-          cluster: vendor-comparison
-          fingerprint: "sha256:deadbeef"
+    suite_id: procurement-baseline-suite
+    version: 1
+    owner: arise-x-eval-team
+    rotation_deadline: "2099-12-31"
+    access_policy: restricted-eval-team-only
+    protected_payload_locator: "configs/protected/procurement-baseline-suite/held_out/"
+    partitions:
+        development:
+            description: Tuning-visible tasks.
+            tasks: [{_DEVELOPMENT_TASK_YAML}]
+        held_out:
+            description: Protected tasks.
+            tasks: [{_HELD_OUT_TASK_YAML}]
 """
 
 
@@ -196,7 +203,7 @@ def test_given_held_out_partition_when_load_settings_then_only_identifiers_are_e
 
     # Assert
     field_names = {held_field.name for held_field in dataclasses.fields(held_out_task)}
-    assert field_names == {"task_id", "family", "cluster", "fingerprint"}
+    assert field_names == {"task_id", "family", "cluster", "fingerprint", "seed"}
 
 
 def test_given_expired_rotation_deadline_when_load_settings_then_raises_configuration_error(
@@ -212,3 +219,138 @@ def test_given_expired_rotation_deadline_when_load_settings_then_raises_configur
     # Act & Assert
     with pytest.raises(ConfigurationError, match="rotation deadline"):
         load_settings(experiment_path, suite_path)
+
+
+def test_given_legacy_experiment_root_when_load_settings_then_remains_compatible(
+    tmp_path, monkeypatch
+) -> None:
+    # Arrange
+    experiment_yaml = _VALID_EXPERIMENT_YAML.replace("scenario:\n", "experiment:\n", 1)
+    experiment_path, suite_path = _write_manifests(tmp_path, experiment_yaml=experiment_yaml)
+    monkeypatch.setenv("ARISE_OUTPUT_DIR", str(tmp_path / "artifacts"))
+
+    # Act
+    settings = load_settings(experiment_path, suite_path)
+
+    # Assert
+    assert settings.scenario.name == "procurement-baseline"
+
+
+def test_given_unknown_disruption_when_load_settings_then_rejects_reference(
+    tmp_path, monkeypatch
+) -> None:
+    # Arrange
+    experiment_yaml = _VALID_EXPERIMENT_YAML.replace("    - latency_spike", "    - unknown-fault")
+    experiment_path, suite_path = _write_manifests(tmp_path, experiment_yaml=experiment_yaml)
+    monkeypatch.setenv("ARISE_OUTPUT_DIR", str(tmp_path / "artifacts"))
+
+    # Act & Assert
+    with pytest.raises(ConfigurationError, match="unknown-fault"):
+        load_settings(experiment_path, suite_path)
+
+
+def test_given_structured_disruption_when_load_settings_then_resolves_catalog_fault(
+    tmp_path, monkeypatch
+) -> None:
+    # Arrange
+    experiment_yaml = _VALID_EXPERIMENT_YAML.replace(
+        "    - latency_spike", "    - name: slow-upstream\n      fault_id: latency_spike"
+    )
+    experiment_path, suite_path = _write_manifests(tmp_path, experiment_yaml=experiment_yaml)
+    monkeypatch.setenv("ARISE_OUTPUT_DIR", str(tmp_path / "artifacts"))
+
+    # Act
+    settings = load_settings(experiment_path, suite_path)
+
+    # Assert
+    assert settings.scenario.disruptions[1].resolved_fault_id == "latency_spike"
+
+
+@pytest.mark.parametrize("value", ["invalid", "nan", "1.1", "-0.1"])
+def test_given_invalid_environment_threshold_when_load_settings_then_error_is_actionable(
+    tmp_path, monkeypatch, value
+) -> None:
+    # Arrange
+    experiment_path, suite_path = _write_manifests(tmp_path)
+    monkeypatch.setenv("ARISE_OUTPUT_DIR", str(tmp_path / "artifacts"))
+    monkeypatch.setenv("ARISE_TRUST_THRESHOLD", value)
+
+    # Act & Assert
+    with pytest.raises(ConfigurationError, match="ARISE_TRUST_THRESHOLD"):
+        load_settings(experiment_path, suite_path)
+
+
+@pytest.mark.parametrize(
+    ("suite_yaml", "message"),
+    [
+        (
+            _VALID_SUITE_YAML.replace("procurement-held-001", "procurement-dev-001"),
+            "unique",
+        ),
+        (
+            _VALID_SUITE_YAML.replace("cluster: vendor-comparison", "cluster: unknown", 1),
+            "unknown cluster",
+        ),
+        (_VALID_SUITE_YAML.replace("seed: 101", "seed: -1"), "seed"),
+        (_VALID_SUITE_YAML.replace("held_out:", "validation:"), "partition"),
+        (
+            _VALID_SUITE_YAML.replace(_HELD_OUT_FINGERPRINT, "sha256:short"),
+            "fingerprint",
+        ),
+    ],
+)
+def test_given_invalid_suite_governance_when_load_settings_then_rejects_manifest(
+    tmp_path, monkeypatch, suite_yaml, message
+) -> None:
+    # Arrange
+    experiment_path, suite_path = _write_manifests(tmp_path, suite_yaml=suite_yaml)
+    monkeypatch.setenv("ARISE_OUTPUT_DIR", str(tmp_path / "artifacts"))
+
+    # Act & Assert
+    with pytest.raises(ConfigurationError, match=message):
+        load_settings(experiment_path, suite_path)
+
+
+def test_given_held_out_task_when_resolving_then_injected_resolver_is_verified(
+    tmp_path, monkeypatch
+) -> None:
+    # Arrange
+    experiment_path, suite_path = _write_manifests(tmp_path)
+    monkeypatch.setenv("ARISE_OUTPUT_DIR", str(tmp_path / "artifacts"))
+    suite = load_settings(experiment_path, suite_path).evaluation_suite
+
+    class Resolver:
+        def __init__(self) -> None:
+            self.calls = []
+
+        def resolve(self, locator, task):
+            self.calls.append((locator, task.task_id))
+            return _HELD_OUT_PAYLOAD
+
+    resolver = Resolver()
+
+    # Act
+    payload = suite.resolve_held_out_payload("procurement-held-001", resolver)
+
+    # Assert
+    assert payload == _HELD_OUT_PAYLOAD
+    assert resolver.calls == [
+        ("configs/protected/procurement-baseline-suite/held_out/", "procurement-held-001")
+    ]
+
+
+def test_given_non_held_out_task_when_resolving_then_rejects_without_calling_resolver(
+    tmp_path, monkeypatch
+) -> None:
+    # Arrange
+    experiment_path, suite_path = _write_manifests(tmp_path)
+    monkeypatch.setenv("ARISE_OUTPUT_DIR", str(tmp_path / "artifacts"))
+    suite = load_settings(experiment_path, suite_path).evaluation_suite
+
+    class Resolver:
+        def resolve(self, locator, task):
+            raise AssertionError("resolver must not be called")
+
+    # Act & Assert
+    with pytest.raises(ScenarioValidationError, match="held_out"):
+        suite.resolve_held_out_payload("procurement-dev-001", Resolver())

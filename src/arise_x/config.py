@@ -9,6 +9,7 @@ from pathlib import Path
 
 import yaml
 
+from arise_x.chaos.catalog import FaultCatalogError, get_fault
 from arise_x.drift.statistics import DEFAULT_ALPHA, DEFAULT_TARGET_POWER, DimensionTestConfig
 from arise_x.scenarios import (
     DisruptionReference,
@@ -81,9 +82,15 @@ def _parse_scenario(document: dict, path: Path) -> Scenario:
     """Build a Scenario from a parsed experiment manifest."""
 
     try:
-        body = document["scenario"]
+        manifest_keys = [key for key in ("scenario", "experiment") if key in document]
+        if len(manifest_keys) != 1:
+            raise ConfigurationError(
+                f"Experiment manifest '{path}' must declare exactly one top-level "
+                "'scenario' or 'experiment' mapping."
+            )
+        body = document[manifest_keys[0]]
         suite_ref_body = body["suite_ref"]
-        return Scenario(
+        scenario = Scenario(
             name=body["name"],
             version=int(body["version"]),
             objective=body["objective"],
@@ -91,7 +98,7 @@ def _parse_scenario(document: dict, path: Path) -> Scenario:
             expected_outcome=body["expected_outcome"],
             seed=int(body["seed"]),
             horizons=tuple(Horizon(label=value) for value in body["horizons"]),
-            disruptions=tuple(DisruptionReference(name=value) for value in body["disruptions"]),
+            disruptions=tuple(_parse_disruption_reference(value) for value in body["disruptions"]),
             thresholds=tuple(
                 Threshold(name=name, value=float(value))
                 for name, value in body["thresholds"].items()
@@ -104,12 +111,27 @@ def _parse_scenario(document: dict, path: Path) -> Scenario:
                 for item in body.get("cluster_refs", [])
             ),
         )
+        for disruption in scenario.disruptions:
+            get_fault(disruption.resolved_fault_id)
+        return scenario
     except KeyError as exc:
         raise ConfigurationError(
             f"Experiment manifest '{path}' is missing required field {exc}."
         ) from exc
-    except ScenarioValidationError as exc:
+    except (FaultCatalogError, ScenarioValidationError, TypeError, ValueError) as exc:
         raise ConfigurationError(f"Experiment manifest '{path}' is invalid: {exc}") from exc
+
+
+def _parse_disruption_reference(body: object) -> DisruptionReference:
+    """Parse a bare disruption name or a structured name/fault reference."""
+
+    if isinstance(body, str):
+        return DisruptionReference(name=body)
+    if isinstance(body, dict):
+        return DisruptionReference(name=body["name"], fault_id=body.get("fault_id"))
+    raise ScenarioValidationError(
+        f"Disruption reference must be a string or mapping, got {type(body).__name__}."
+    )
 
 
 def _parse_suite_task(body: dict) -> SuiteTask:
@@ -120,6 +142,7 @@ def _parse_suite_task(body: dict) -> SuiteTask:
         family=body["family"],
         cluster=body["cluster"],
         fingerprint=body.get("fingerprint"),
+        seed=body.get("seed"),
     )
 
 
@@ -149,7 +172,7 @@ def _parse_evaluation_suite(document: dict, path: Path) -> EvaluationSuite:
         raise ConfigurationError(
             f"Evaluation suite manifest '{path}' is missing required field {exc}."
         ) from exc
-    except ScenarioValidationError as exc:
+    except (ScenarioValidationError, TypeError, ValueError) as exc:
         raise ConfigurationError(f"Evaluation suite manifest '{path}' is invalid: {exc}") from exc
 
 
@@ -162,6 +185,33 @@ def _validate_compatibility(scenario: Scenario, suite: EvaluationSuite, suite_pa
             f"'{scenario.suite_ref.suite_id}' v{scenario.suite_ref.version}, "
             f"but '{suite_path}' declares '{suite.suite_id}' v{suite.version}."
         )
+
+    cluster_families = {cluster.cluster_id: cluster.family for cluster in scenario.cluster_refs}
+    if not cluster_families:
+        raise ConfigurationError(
+            f"Scenario '{scenario.name}' must declare at least one task-family cluster."
+        )
+    for partition in suite.partitions:
+        for task in partition.tasks:
+            expected_family = cluster_families.get(task.cluster)
+            if expected_family is None:
+                raise ConfigurationError(
+                    f"Task '{task.task_id}' references unknown cluster '{task.cluster}' "
+                    f"for scenario '{scenario.name}'."
+                )
+            if task.family != expected_family:
+                raise ConfigurationError(
+                    f"Task '{task.task_id}' family '{task.family}' does not match cluster "
+                    f"'{task.cluster}' family '{expected_family}'."
+                )
+            if task.seed is None:
+                raise ConfigurationError(
+                    f"Task '{task.task_id}' must declare a deterministic non-negative seed."
+                )
+            if partition.name == "held_out" and task.fingerprint is None:
+                raise ConfigurationError(
+                    f"Held-out task '{task.task_id}' must declare a sha256 fingerprint."
+                )
 
 
 def _validate_rotation(suite: EvaluationSuite) -> None:
@@ -208,6 +258,17 @@ def _parse_gate_policy(document: dict, path: Path) -> GatePolicyConfig | None:
                     minimum_detectable_effect=float(dimension_body["minimum_detectable_effect"]),
                     tolerance=float(dimension_body["tolerance"]),
                     is_binary=bool(dimension_body.get("is_binary", False)),
+                    pilot_standard_deviation=(
+                        float(dimension_body["pilot_standard_deviation"])
+                        if "pilot_standard_deviation" in dimension_body
+                        else None
+                    ),
+                    minimum_cluster_count=int(
+                        dimension_body.get(
+                            "minimum_cluster_count",
+                            body.get("minimum_cluster_count", 2),
+                        )
+                    ),
                 ),
             )
             for name, dimension_body in body.get("dimensions", {}).items()
@@ -228,11 +289,44 @@ def _parse_gate_policy(document: dict, path: Path) -> GatePolicyConfig | None:
                 if "error_budget_window_episode_count" in body
                 else None
             ),
+            version=str(body.get("version", "example-v1")),
+            configured_required_dimensions=tuple(
+                VectorDimension(value)
+                for value in body.get(
+                    "required_dimensions", [dimension.value for dimension in VectorDimension]
+                )
+            ),
+            minimum_cluster_count=int(body.get("minimum_cluster_count", 2)),
+            minimum_eligible_count=int(body.get("minimum_eligible_count", 30)),
+            sli_definition=str(
+                body.get(
+                    "sli_definition",
+                    "goal_success_and_safety_and_verified_fault_recovery",
+                )
+            ),
         )
-    except (KeyError, ValueError) as exc:
+    except (KeyError, TypeError, ValueError) as exc:
         raise ConfigurationError(
             f"Experiment manifest '{path}' has an invalid gate_policy section: {exc}"
         ) from exc
+
+
+def _environment_float(name: str, default: float) -> float:
+    """Read a finite unit-interval environment override with actionable errors."""
+
+    raw_value = os.getenv(name, str(default))
+    try:
+        value = float(raw_value)
+    except ValueError as exc:
+        raise ConfigurationError(
+            f"Environment variable {name} must be a number within [0.0, 1.0], "
+            f"got {raw_value!r}."
+        ) from exc
+    if not 0.0 <= value <= 1.0:
+        raise ConfigurationError(
+            f"Environment variable {name} must be within [0.0, 1.0], got {raw_value!r}."
+        )
+    return value
 
 
 def load_settings(
@@ -252,14 +346,22 @@ def load_settings(
     _validate_compatibility(scenario, evaluation_suite, suite_path)
     _validate_rotation(evaluation_suite)
 
-    trust_threshold = float(
-        os.getenv("ARISE_TRUST_THRESHOLD", str(scenario.threshold("trust").value))
-    )
-    drift_threshold = float(
-        os.getenv("ARISE_DRIFT_THRESHOLD", str(scenario.threshold("drift").value))
-    )
+    try:
+        default_trust_threshold = scenario.threshold("trust").value
+        default_drift_threshold = scenario.threshold("drift").value
+    except ScenarioValidationError as exc:
+        raise ConfigurationError(
+            f"Experiment manifest '{experiment_path}' is invalid: {exc}"
+        ) from exc
+    trust_threshold = _environment_float("ARISE_TRUST_THRESHOLD", default_trust_threshold)
+    drift_threshold = _environment_float("ARISE_DRIFT_THRESHOLD", default_drift_threshold)
     output_dir = Path(os.getenv("ARISE_OUTPUT_DIR", "artifacts"))
-    output_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        output_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise ConfigurationError(
+            f"Unable to create ARISE_OUTPUT_DIR '{output_dir}': {exc}"
+        ) from exc
 
     return Settings(
         environment=os.getenv("ARISE_ENV", "local"),

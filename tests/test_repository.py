@@ -10,16 +10,34 @@ from pathlib import Path
 import pytest
 
 from arise_x.evaluation.runner import IterationResult
+from arise_x.fingerprints import canonical_json_fingerprint
 from arise_x.storage.repository import (
+    GATE_DECISION_SCHEMA_VERSION,
     SCHEMA_VERSION,
     CorruptRunError,
+    GateDecisionNotFoundError,
+    GateDecisionRecord,
     RunNotFoundError,
     RunRepository,
     UnsupportedSchemaVersionError,
     write_results,
 )
-from arise_x.telemetry.trajectory import Outcome, Step, Trajectory, UsageMetrics
-from arise_x.trust.vector import DimensionScore, ReliabilityVector, VectorDimension
+from arise_x.telemetry.events import RunEvent
+from arise_x.telemetry.trajectory import (
+    ContentKind,
+    Outcome,
+    OutcomeStatus,
+    RedactedContent,
+    Step,
+    Trajectory,
+    UsageMetrics,
+)
+from arise_x.trust.vector import (
+    ConfidenceMetadata,
+    DimensionScore,
+    ReliabilityVector,
+    VectorDimension,
+)
 
 
 def _sample_results() -> list[IterationResult]:
@@ -49,8 +67,14 @@ def _sample_trajectory(task_id: str = "task-1") -> Trajectory:
         usage=UsageMetrics(
             latency_ms=120.0, prompt_tokens=10, completion_tokens=5, cost_usd=0.001
         ),
-        prompt_text="prompt",
-        output_text="output",
+        prompt_text=RedactedContent(
+            kind=ContentKind.PROMPT,
+            reference_id=f"trajectory:run-1:{task_id}:step:0:prompt",
+        ),
+        output_text=RedactedContent(
+            kind=ContentKind.OUTPUT,
+            reference_id=f"trajectory:run-1:{task_id}:step:0:output",
+        ),
     )
     return Trajectory(
         run_id="run-1",
@@ -66,13 +90,27 @@ def _sample_trajectory(task_id: str = "task-1") -> Trajectory:
         agent_id="ScriptedAgent",
         agent_version="scripted-agent-v1",
         steps=(step,),
-        outcome=Outcome(goal_achieved=True, label="goal_achieved"),
+        outcome=Outcome(
+            goal_achieved=True,
+            label="goal_achieved",
+            status=OutcomeStatus.SUCCEEDED,
+            terminal_state="completed",
+            evidence_references=(f"trajectory:run-1:{task_id}:outcome",),
+        ),
     )
 
 
 def _sample_vector() -> ReliabilityVector:
     def score(dimension: VectorDimension, value: float) -> DimensionScore:
-        return DimensionScore(dimension=dimension, value=value, available=True, evidence_count=1)
+        return DimensionScore(
+            dimension=dimension,
+            value=value,
+            available=True,
+            evidence_count=1,
+            evidence_total=1,
+            confidence=ConfidenceMetadata(score=1.0, method="direct_observation"),
+            evidence_references=(f"trajectory:run-1:task-1:{dimension.value}",),
+        )
 
     return ReliabilityVector(
         goal_success=score(VectorDimension.GOAL_SUCCESS, 1.0),
@@ -83,6 +121,37 @@ def _sample_vector() -> ReliabilityVector:
         efficiency=score(VectorDimension.EFFICIENCY, 0.9),
         cost=score(VectorDimension.COST, 0.95),
         autonomy=score(VectorDimension.AUTONOMY, 1.0),
+    )
+
+
+def _sample_gate_decision(decision_id: str = "decision-1") -> GateDecisionRecord:
+    """Build one reconstructable decision fixture without raw trajectory content."""
+
+    policy_snapshot = {"version": "gate-v1", "alpha": 0.02}
+    suite_snapshot = {"suite_id": "suite-1", "version": 1}
+    return GateDecisionRecord(
+        decision_id=decision_id,
+        schema_version=GATE_DECISION_SCHEMA_VERSION,
+        created_at="2026-09-22T00:00:00+00:00",
+        baseline_run_id="baseline",
+        candidate_run_id="candidate",
+        production_history_run_id="production",
+        policy_version="gate-v1",
+        policy_fingerprint=canonical_json_fingerprint(policy_snapshot),
+        policy_snapshot=policy_snapshot,
+        suite_version=1,
+        suite_fingerprint=canonical_json_fingerprint(suite_snapshot),
+        suite_snapshot=suite_snapshot,
+        verdict="pass",
+        geometric_ari=1.0,
+        dimension_rationale=({"dimension": "goal_success", "effect_size": 0.0},),
+        critical_override_reasons=(),
+        held_out_suite_reasons=(),
+        required_evidence_reasons=(),
+        non_critical_warning_reasons=(),
+        error_budget_reasons=(),
+        error_budget={"eligible_count": 30, "allowed_bad": 1.5},
+        window_inputs={"window_days": 28, "window_end": "2026-09-22T00:00:00+00:00"},
     )
 
 
@@ -113,6 +182,8 @@ def test_given_metadata_fields_when_write_run_then_persists_provided_metadata(tm
         config_fingerprint="fingerprint-abc",
         seed=42,
         source_revision="deadbeef",
+        trust_threshold=0.8,
+        drift_threshold=0.2,
     )
     record = repository.read_run("run-2")
 
@@ -124,6 +195,8 @@ def test_given_metadata_fields_when_write_run_then_persists_provided_metadata(tm
     assert record.metadata.config_fingerprint == "fingerprint-abc"
     assert record.metadata.seed == 42
     assert record.metadata.source_revision == "deadbeef"
+    assert record.metadata.trust_threshold == pytest.approx(0.8)
+    assert record.metadata.drift_threshold == pytest.approx(0.2)
 
 
 def test_given_no_run_id_when_write_run_then_generates_unique_run_id(tmp_path) -> None:
@@ -214,22 +287,42 @@ def test_given_pre_trajectory_schema_version_when_read_run_then_raises_unsupport
         repository.read_run("legacy-run")
 
 
+def test_given_current_schema_with_missing_event_section_when_read_then_rejects(tmp_path) -> None:
+    # Arrange
+    repository = RunRepository(tmp_path)
+    repository.write_run([], run_id="run-1")
+    path = tmp_path / "run-1.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    del payload["events"]
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    # Act & Assert
+    with pytest.raises(CorruptRunError, match="envelope sections"):
+        repository.read_run("run-1")
+
+
 def test_given_trajectories_and_vectors_when_write_and_read_run_then_round_trips(tmp_path) -> None:
     # Arrange
     repository = RunRepository(tmp_path)
     results = _sample_results()[:1]
     trajectories = [_sample_trajectory()]
     vectors = [_sample_vector()]
+    events = [RunEvent.from_trajectory(trajectories[0])]
 
     # Act
     repository.write_run(
-        results, run_id="run-1", trajectories=trajectories, vectors=vectors
+        results,
+        run_id="run-1",
+        events=events,
+        trajectories=trajectories,
+        vectors=vectors,
     )
     record = repository.read_run("run-1")
 
     # Assert
     assert record.trajectories == trajectories
     assert record.vectors == vectors
+    assert record.events == events
 
 
 def test_given_no_trajectories_or_vectors_when_write_run_then_read_run_returns_empty_lists(
@@ -384,7 +477,7 @@ def test_given_legacy_summaries_when_listing_then_only_versioned_runs_are_return
 
 @pytest.mark.parametrize("payload", [{}, [42], [{"task_id": "task-1"}], [
     {**asdict(_sample_results()[0]), "trustworthy": "yes"},
-], {"metadata": {"schema_version": 2}, "results": []}])
+], {"metadata": {"schema_version": SCHEMA_VERSION}, "results": []}])
 def test_given_unrecognized_json_when_listing_then_does_not_silently_skip(
     tmp_path, payload,
 ) -> None:
@@ -455,13 +548,29 @@ def test_given_identity_or_contract_mismatch_when_read_then_rejects(
         RunRepository(tmp_path).read_run("run-1")
 
 
-@pytest.mark.parametrize("section", ["results", "trajectories", "vectors"])
+@pytest.mark.parametrize("section", ["results", "events", "trajectories", "vectors"])
 def test_given_incomplete_evidence_when_read_then_rejects(
     tmp_path, evidence_payload, section,
 ) -> None:
     # Arrange
     evidence_payload[section] = []
     (tmp_path / "run-1.json").write_text(json.dumps(evidence_payload), encoding="utf-8")
+
+    # Act & Assert
+    with pytest.raises(CorruptRunError):
+        RunRepository(tmp_path).read_run("run-1")
+
+
+def test_given_raw_prompt_in_persisted_trajectory_when_read_then_rejects(
+    tmp_path,
+    evidence_payload,
+) -> None:
+    # Arrange
+    evidence_payload["trajectories"][0]["steps"][0]["prompt_text"] = "raw secret"
+    (tmp_path / "run-1.json").write_text(
+        json.dumps(evidence_payload),
+        encoding="utf-8",
+    )
 
     # Act & Assert
     with pytest.raises(CorruptRunError):
@@ -483,13 +592,16 @@ def test_given_invalid_evidence_when_write_then_rejects_before_creating_file(
         trajectory = replace(trajectory, task_id="other-task")
     elif mismatch == "count":
         results = _sample_results()
-    elif mismatch == "vector-schema":
-        vector = replace(vector, schema_version="unsupported-v99")
-    else:
-        vector = replace(vector, safety=replace(vector.safety, normalization_version="v99"))
 
     # Act & Assert
-    with pytest.raises((CorruptRunError, UnsupportedSchemaVersionError)):
+    with pytest.raises((CorruptRunError, UnsupportedSchemaVersionError, ValueError)):
+        if mismatch == "vector-schema":
+            vector = replace(vector, schema_version="unsupported-v99")
+        elif mismatch == "normalization":
+            vector = replace(
+                vector,
+                safety=replace(vector.safety, normalization_version="v99"),
+            )
         repository.write_run(results, run_id="run-1", trajectories=[trajectory], vectors=[vector])
     assert not (tmp_path / "run-1.json").exists()
 
@@ -651,3 +763,97 @@ def test_given_existing_legacy_file_when_write_results_then_keeps_overwrite_beha
 
     # Assert
     assert json.loads(path.read_text(encoding="utf-8")) == []
+
+
+def test_given_gate_decision_when_written_then_round_trips_reconstructable_record(tmp_path) -> None:
+    # Arrange
+    repository = RunRepository(tmp_path)
+    decision = _sample_gate_decision()
+
+    # Act
+    repository.write_gate_decision(decision)
+    restored = repository.read_gate_decision(decision.decision_id)
+
+    # Assert
+    assert restored == decision
+    assert repository.gate_decision_exists(decision.decision_id)
+    assert repository.list_runs() == []
+
+
+def test_given_persisted_gate_decision_when_policy_snapshot_tampered_then_rejected(
+    tmp_path,
+) -> None:
+    # Arrange
+    repository = RunRepository(tmp_path)
+    decision = _sample_gate_decision()
+    repository.write_gate_decision(decision)
+    path = tmp_path / "decisions" / "decision-1.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["policy_snapshot"]["alpha"] = 0.03
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    # Act & Assert
+    with pytest.raises(CorruptRunError, match="policy_snapshot fingerprint mismatch"):
+        repository.read_gate_decision(decision.decision_id)
+
+
+def test_given_persisted_gate_decision_when_suite_snapshot_tampered_then_rejected(
+    tmp_path,
+) -> None:
+    # Arrange
+    repository = RunRepository(tmp_path)
+    decision = _sample_gate_decision()
+    repository.write_gate_decision(decision)
+    path = tmp_path / "decisions" / "decision-1.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["suite_snapshot"]["version"] = 2
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    # Act & Assert
+    with pytest.raises(CorruptRunError, match="suite_snapshot fingerprint mismatch"):
+        repository.read_gate_decision(decision.decision_id)
+
+
+def test_given_persisted_gate_decision_when_snapshot_is_not_json_then_rejected(
+    tmp_path,
+) -> None:
+    # Arrange
+    repository = RunRepository(tmp_path)
+    decision = _sample_gate_decision()
+    repository.write_gate_decision(decision)
+    path = tmp_path / "decisions" / "decision-1.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["policy_snapshot"]["alpha"] = float("nan")
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    # Act & Assert
+    with pytest.raises(
+        CorruptRunError,
+        match="policy_snapshot is not JSON-compatible",
+    ):
+        repository.read_gate_decision(decision.decision_id)
+
+
+def test_given_existing_gate_decision_when_rewritten_then_original_bytes_remain(tmp_path) -> None:
+    # Arrange
+    repository = RunRepository(tmp_path)
+    decision = _sample_gate_decision()
+    repository.write_gate_decision(decision)
+    path = tmp_path / "decisions" / "decision-1.json"
+    original = path.read_bytes()
+
+    # Act & Assert
+    with pytest.raises(FileExistsError):
+        repository.write_gate_decision(replace(decision, verdict="block"))
+    assert path.read_bytes() == original
+
+
+def test_given_unknown_or_unsafe_decision_when_accessed_then_fails_safely(tmp_path) -> None:
+    # Arrange
+    repository = RunRepository(tmp_path)
+
+    # Act & Assert
+    with pytest.raises(GateDecisionNotFoundError):
+        repository.read_gate_decision("missing")
+    with pytest.raises(ValueError):
+        repository.read_gate_decision("../outside")

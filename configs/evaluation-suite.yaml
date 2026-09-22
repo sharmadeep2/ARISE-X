@@ -12,17 +12,21 @@ suite:
         - task_id: procurement-dev-001
           family: procurement
           cluster: vendor-comparison
+          seed: 2026082501
         - task_id: procurement-dev-002
           family: procurement
           cluster: budget-approval
+          seed: 2026082502
     held_out:
       description: Protected tasks reserved for release-gating decisions only.
       tasks:
         - task_id: procurement-held-001
           family: procurement
           cluster: vendor-comparison
+          seed: 2026082511
           fingerprint: "sha256:2f8c9e1d4a7b6053f1c2d3e4a5b6c7d8e9f0a1b2c3d4e5f60718293a4b5c6d7e"
         - task_id: procurement-held-002
           family: procurement
           cluster: negotiation-failure
-          fingerprint: "sha256:9a1b2c3d4e5f60718293a4b5c6d7e8f90123456789abcdef0123456789abcde"
+          seed: 2026082512
+          fingerprint: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"

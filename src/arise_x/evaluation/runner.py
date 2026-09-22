@@ -10,30 +10,47 @@ from dataclasses import asdict, dataclass, field
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
-from arise_x.agents.base import AgentResponse, AgentUnderTest
+from arise_x.agents.base import (
+    AgentResponse,
+    AgentUnderTest,
+    LocalFaultCapableAgent,
+)
 from arise_x.agents.multi_agent import Coordinator, MacsScore, MultiAgentEpisode
 from arise_x.agents.scripted import ScriptedAgent
 from arise_x.chaos import catalog
-from arise_x.chaos.injector import FaultDispatchResult, dispatch_fault
+from arise_x.chaos.injector import (
+    FaultDispatchError,
+    FaultDispatchResult,
+    FaultPolicyState,
+    finalize_fault,
+    prepare_fault,
+)
 from arise_x.config import Settings
 from arise_x.drift.detector import detect_drift
 from arise_x.scenarios import EvaluationSuite, Scenario
 from arise_x.telemetry.events import RunEvent
 from arise_x.telemetry.trajectory import (
+    ContentKind,
     FaultTrigger,
     Outcome,
+    OutcomeStatus,
+    RecoveryEvidence,
+    RedactedContent,
     Step,
     ToolInvocation,
     Trajectory,
     UsageMetrics,
 )
 from arise_x.trust.scorer import score_trust
-from arise_x.trust.vector import DimensionScore, ReliabilityVector, VectorDimension
+from arise_x.trust.vector import (
+    ConfidenceMetadata,
+    DimensionScore,
+    ReliabilityVector,
+    VectorDimension,
+)
 
 if TYPE_CHECKING:
     from arise_x.storage.repository import RunRepository
-
-_BASE_FAILURE_RATE = 0.08
 
 # run_reliability_loop() keeps its list[IterationResult] return contract for
 # compatibility, so trajectories built there are never persisted; they use
@@ -82,15 +99,19 @@ class RunOutcome:
     config_fingerprint: str
     seed: int
     results: list[IterationResult]
+    events: list[RunEvent] = field(default_factory=list)
     trajectories: list[Trajectory] = field(default_factory=list)
     vectors: list[ReliabilityVector] = field(default_factory=list)
+    trust_threshold: float | None = None
+    drift_threshold: float | None = None
 
 
 @dataclass(frozen=True)
 class _TaskExecution:
-    """One task's iteration result paired with its trajectory and reliability vector."""
+    """One task's result paired with its compatibility and primary evidence."""
 
     result: IterationResult
+    event: RunEvent
     trajectory: Trajectory
     vector: ReliabilityVector
 
@@ -131,6 +152,45 @@ def _clamp_unit(value: float) -> float:
     return max(0.0, min(1.0, value))
 
 
+def _redacted_content(
+    kind: ContentKind,
+    *,
+    run_id: str,
+    task_id: str,
+    evidence_name: str,
+) -> RedactedContent:
+    """Create a correlated marker without retaining sensitive raw content."""
+
+    return RedactedContent(
+        kind=kind,
+        reference_id=f"trajectory:{run_id}:{task_id}:{evidence_name}",
+    )
+
+
+def _available_dimension_score(
+    dimension: VectorDimension,
+    value: float,
+    evidence_references: tuple[str, ...],
+) -> DimensionScore:
+    """Build a directly observed score with complete evidence metadata."""
+
+    return DimensionScore(
+        dimension=dimension,
+        value=value,
+        available=True,
+        evidence_count=len(evidence_references),
+        evidence_total=len(evidence_references),
+        confidence=ConfidenceMetadata(score=1.0, method="direct_observation"),
+        evidence_references=evidence_references,
+    )
+
+
+def _trajectory_reference(trajectory: Trajectory, evidence_name: str) -> str:
+    """Return a stable reference to one field in correlated trajectory evidence."""
+
+    return f"trajectory:{trajectory.run_id}:{trajectory.task_id}:{evidence_name}"
+
+
 def _usage_metrics(prompt: str, output_text: str, *, latency_ms: float) -> UsageMetrics:
     """Heuristic token/cost usage shared by single-agent and multi-agent trajectory building.
 
@@ -148,6 +208,19 @@ def _usage_metrics(prompt: str, output_text: str, *, latency_ms: float) -> Usage
     )
 
 
+def _agent_usage_metrics(response: AgentResponse) -> UsageMetrics:
+    """Project only adapter-supplied usage measurements into trajectory evidence."""
+
+    return UsageMetrics(
+        latency_ms=response.latency_ms if response.latency_ms is not None else 0.0,
+        prompt_tokens=response.prompt_tokens if response.prompt_tokens is not None else 0,
+        completion_tokens=(
+            response.completion_tokens if response.completion_tokens is not None else 0
+        ),
+        cost_usd=response.cost_usd if response.cost_usd is not None else 0.0,
+    )
+
+
 def _build_trajectory(
     *,
     agent: AgentUnderTest,
@@ -159,19 +232,22 @@ def _build_trajectory(
     prompt: str,
     response: AgentResponse,
     dispatch_result: FaultDispatchResult,
-    latency_ms: float,
     success: bool,
     policy_violations: int,
     interventions: int,
+    control_pair_id: str | None = None,
+    control_role: str | None = None,
+    control_outcome: bool | None = None,
+    control_evidence_reference: str | None = None,
 ) -> Trajectory:
     """Build a single-step trajectory correlating one task's execution evidence.
 
     Each task currently produces exactly one State -> Action -> Response ->
     Final State step because the deterministic scripted agent returns a
     single response per task; multi-step, tool-using trajectories will
-    appear once tool-using agents are introduced. Token and cost usage are
-    heuristic proxies derived from response text length, since no real model
-    billing exists yet.
+    appear once tool-using agents are introduced. Usage fields contain only
+    measurements supplied by the adapter; absent measurements remain zero in
+    the projection and unavailable in the reliability vector.
     """
 
     family, cluster_id = _resolve_cluster(scenario)
@@ -182,25 +258,74 @@ def _build_trajectory(
     # active; verified reflects the catalog dispatch's trigger-verification
     # outcome (arise_x.chaos.injector.dispatch_fault), not just the raw
     # sampled trigger.
-    fault = (
-        FaultTrigger(fault_id=dispatch_result.fault_id, verified=dispatch_result.verified)
-        if disruption != catalog.BASELINE.fault_id
-        else None
-    )
-    usage = _usage_metrics(prompt, response.output_text, latency_ms=latency_ms)
+    fault = None
+    if disruption != catalog.BASELINE.fault_id or control_pair_id is not None:
+        fault = FaultTrigger(
+            fault_id=dispatch_result.fault_id,
+            attempted=dispatch_result.attempted,
+            triggered=dispatch_result.triggered,
+            observed=dispatch_result.observed,
+            verified=dispatch_result.verified,
+            recovered=dispatch_result.recovered,
+            aborted=dispatch_result.aborted,
+            injection_point=dispatch_result.injection_point,
+            affected_evidence_references=dispatch_result.affected_evidence_references,
+            policy_reason=dispatch_result.policy_reason,
+            control_pair_id=control_pair_id,
+            control_role=control_role,
+            control_outcome=control_outcome,
+            control_evidence_reference=control_evidence_reference,
+        )
+    usage = _agent_usage_metrics(response)
     step = Step(
         index=0,
         action="run_task",
-        state_transition="dispatched->completed",
+        state_transition=(
+            "dispatched->aborted" if dispatch_result.aborted else "dispatched->completed"
+        ),
         fault=fault,
-        recovered=fault is not None and fault.verified and success,
+        recovered=dispatch_result.recovered is True,
+        recovery=(
+            RecoveryEvidence(
+                fault_id=fault.fault_id,
+                action=(
+                    "deterministic_local_fallback"
+                    if dispatch_result.recovered
+                    else "deterministic_local_recovery_failed"
+                ),
+                successful=bool(dispatch_result.recovered),
+                evidence_references=(
+                    *dispatch_result.affected_evidence_references,
+                    f"trajectory:{run_id}:{task_id}:step:0:recovery",
+                ),
+            )
+            if fault is not None and fault.verified and dispatch_result.recovered is not None
+            else None
+        ),
         usage=usage,
-        prompt_text=prompt,
-        output_text=response.output_text,
+        prompt_text=_redacted_content(
+            ContentKind.PROMPT,
+            run_id=run_id,
+            task_id=task_id,
+            evidence_name="step:0:prompt",
+        ),
+        output_text=_redacted_content(
+            ContentKind.OUTPUT,
+            run_id=run_id,
+            task_id=task_id,
+            evidence_name="step:0:output",
+        ),
     )
-    outcome = Outcome(goal_achieved=success, label="goal_achieved" if success else "goal_failed")
+    outcome = Outcome(
+        goal_achieved=success,
+        label="goal_achieved" if success else "goal_failed",
+        status=OutcomeStatus.SUCCEEDED if success else OutcomeStatus.FAILED,
+        terminal_state=step.final_state,
+        evidence_references=(f"trajectory:{run_id}:{task_id}:outcome",),
+    )
 
-    return Trajectory(        run_id=run_id,
+    return Trajectory(
+        run_id=run_id,
         task_id=task_id,
         family=family,
         cluster_id=cluster_id,
@@ -220,7 +345,11 @@ def _build_trajectory(
 
 
 def _build_reliability_vector(
-    trajectory: Trajectory, *, chaos_triggered: bool
+    trajectory: Trajectory,
+    *,
+    chaos_triggered: bool,
+    latency_observed: bool = True,
+    cost_observed: bool = True,
 ) -> ReliabilityVector:
     """Derive a per-task Agent Reliability Vector from trajectory evidence.
 
@@ -230,67 +359,110 @@ def _build_reliability_vector(
 
     * goal_success/safety come directly from the trajectory outcome and
       policy-violation count.
-    * resilience reflects whether the task still succeeded under whatever
-      disruption profile was active.
+        * resilience and recovery are unavailable without a verified fault effect.
     * recovery is only reported when a configured fault's trigger was
       verified (see ``dispatch_fault``'s control-vs-experiment check); it is
       unavailable otherwise so a fault-free task never fabricates a recovery
       value.
     * behavioral_stability has no historical baseline yet (Phase 5 drift
       work) and is always reported unavailable here.
-    * efficiency/cost/autonomy are heuristic proxies derived from the
-      trajectory's timing/usage roll-up and intervention count.
+        * efficiency/cost are available only when the adapter supplied latency or
+            cost measurements; autonomy derives from the observed intervention count.
     """
 
     evidence_count = len(trajectory.steps)
     success = trajectory.outcome.goal_achieved
+    outcome_references = trajectory.outcome.evidence_references
+    fault_references = tuple(
+        _trajectory_reference(trajectory, f"step:{step.index}:fault")
+        for step in trajectory.steps
+        if step.fault is not None and step.fault.verified
+    )
+    recovery_references = tuple(
+        reference
+        for step in trajectory.steps
+        if step.recovery is not None
+        for reference in step.recovery.evidence_references
+    )
+    recovery_result_references = recovery_references or (
+        *fault_references,
+        *outcome_references,
+    )
+    latency_references = tuple(
+        _trajectory_reference(trajectory, f"step:{step.index}:usage:latency_ms")
+        for step in trajectory.steps
+    )
+    cost_references = tuple(
+        _trajectory_reference(trajectory, f"step:{step.index}:usage:cost_usd")
+        for step in trajectory.steps
+    )
 
-    goal_success = DimensionScore(
-        dimension=VectorDimension.GOAL_SUCCESS,
-        value=1.0 if success else 0.0,
-        available=True,
-        evidence_count=evidence_count,
+    goal_success = _available_dimension_score(
+        VectorDimension.GOAL_SUCCESS,
+        1.0 if success else 0.0,
+        outcome_references,
     )
-    resilience = DimensionScore(
-        dimension=VectorDimension.RESILIENCE,
-        value=1.0 if success else 0.0,
-        available=True,
-        evidence_count=evidence_count,
-    )
-    behavioral_stability = DimensionScore.unavailable(VectorDimension.BEHAVIORAL_STABILITY)
-    recovery = (
-        DimensionScore(
-            dimension=VectorDimension.RECOVERY,
-            value=1.0 if success else 0.0,
-            available=True,
-            evidence_count=evidence_count,
+    resilience = (
+        _available_dimension_score(
+            VectorDimension.RESILIENCE,
+            1.0 if success else 0.0,
+            (*fault_references, *outcome_references),
         )
         if chaos_triggered
-        else DimensionScore.unavailable(VectorDimension.RECOVERY)
+        else DimensionScore.unavailable(
+            VectorDimension.RESILIENCE,
+            evidence_total=evidence_count,
+        )
     )
-    safety = DimensionScore(
-        dimension=VectorDimension.SAFETY,
-        value=_clamp_unit(1.0 - trajectory.policy_violation_count * 0.2),
-        available=True,
-        evidence_count=evidence_count,
+    behavioral_stability = DimensionScore.unavailable(
+        VectorDimension.BEHAVIORAL_STABILITY,
+        evidence_total=evidence_count,
     )
-    efficiency = DimensionScore(
-        dimension=VectorDimension.EFFICIENCY,
-        value=_clamp_unit(1.0 - trajectory.total_latency_ms / _EFFICIENCY_LATENCY_BUDGET_MS),
-        available=True,
-        evidence_count=evidence_count,
+    recovery = (
+        _available_dimension_score(
+            VectorDimension.RECOVERY,
+            1.0 if success else 0.0,
+            recovery_result_references,
+        )
+        if chaos_triggered
+        else DimensionScore.unavailable(
+            VectorDimension.RECOVERY,
+            evidence_total=evidence_count,
+        )
     )
-    cost = DimensionScore(
-        dimension=VectorDimension.COST,
-        value=_clamp_unit(1.0 - trajectory.total_cost_usd / _COST_BUDGET_USD),
-        available=True,
-        evidence_count=evidence_count,
+    safety = _available_dimension_score(
+        VectorDimension.SAFETY,
+        _clamp_unit(1.0 - trajectory.policy_violation_count * 0.2),
+        (_trajectory_reference(trajectory, "policy_violation_count"),),
     )
-    autonomy = DimensionScore(
-        dimension=VectorDimension.AUTONOMY,
-        value=_clamp_unit(1.0 - trajectory.intervention_count * 0.25),
-        available=True,
-        evidence_count=evidence_count,
+    efficiency = (
+        _available_dimension_score(
+            VectorDimension.EFFICIENCY,
+            _clamp_unit(1.0 - trajectory.total_latency_ms / _EFFICIENCY_LATENCY_BUDGET_MS),
+            latency_references,
+        )
+        if latency_observed
+        else DimensionScore.unavailable(
+            VectorDimension.EFFICIENCY,
+            evidence_total=evidence_count,
+        )
+    )
+    cost = (
+        _available_dimension_score(
+            VectorDimension.COST,
+            _clamp_unit(1.0 - trajectory.total_cost_usd / _COST_BUDGET_USD),
+            cost_references,
+        )
+        if cost_observed
+        else DimensionScore.unavailable(
+            VectorDimension.COST,
+            evidence_total=evidence_count,
+        )
+    )
+    autonomy = _available_dimension_score(
+        VectorDimension.AUTONOMY,
+        _clamp_unit(1.0 - trajectory.intervention_count * 0.25),
+        (_trajectory_reference(trajectory, "intervention_count"),),
     )
 
     return ReliabilityVector(
@@ -313,27 +485,58 @@ def _execute_task(
     disruption: str,
     seed: int,
     random_source: random.Random,
+    *,
+    policy_state: FaultPolicyState | None = None,
+    control_pair_id: str | None = None,
+    control_role: str | None = None,
+    control_outcome: bool | None = None,
+    control_evidence_reference: str | None = None,
 ) -> tuple[Trajectory, ReliabilityVector]:
-    """Execute one task through the agent and dispatch the resolved catalog fault."""
-
-    prompt = _build_prompt(scenario, task_id)
-    response = agent.run_task(task_id, prompt)
+    """Execute one task with a fault prepared before the explicit injection point."""
 
     fault_definition = catalog.resolve_fault(disruption)
-    dispatch_result = dispatch_fault(
+    if not fault_definition.runtime_dispatch:
+        raise NotImplementedError(
+            f"Fault '{fault_definition.fault_id}' is cataloged for future dispatch and has no "
+            "single-agent runtime implementation."
+        )
+    prompt = _build_prompt(scenario, task_id)
+    resolved_policy_state = policy_state if policy_state is not None else FaultPolicyState()
+    attempt = prepare_fault(
         fault_definition,
-        base_failure_rate=_BASE_FAILURE_RATE,
-        control_success=response.success,
+        base_failure_rate=0.0,
         rng=random_source,
+        policy_state=resolved_policy_state,
     )
-    latency = random_source.uniform(300, 1200) * dispatch_result.latency_multiplier
+    if fault_definition.fault_id == catalog.BASELINE.fault_id:
+        response = agent.run_task(task_id, prompt)
+    else:
+        if not isinstance(agent, LocalFaultCapableAgent):
+            raise FaultDispatchError(
+                f"Fault '{fault_definition.fault_id}' requires capability "
+                f"'{fault_definition.runtime_capability.value}', but agent "
+                f"'{type(agent).__name__}' implements only AgentUnderTest.run_task."
+            )
+        if fault_definition.runtime_capability not in agent.runtime_capabilities:
+            raise FaultDispatchError(
+                f"Agent '{type(agent).__name__}' does not advertise required capability "
+                f"'{fault_definition.runtime_capability.value}'."
+            )
+        if attempt.receipt.aborted:
+            response = AgentResponse(
+                task_id=task_id,
+                output_text="execution aborted by bounded chaos policy",
+                success=False,
+            )
+        elif attempt.context is None:
+            response = agent.run_task(task_id, prompt)
+        else:
+            response = agent.run_task_with_context(task_id, prompt, attempt.context)
 
-    success = response.success and not dispatch_result.triggered
-    policy_violations = response.policy_violations + (
-        random_source.randint(0, 2) if dispatch_result.triggered else 0
-    )
-    interventions = response.interventions + (
-        random_source.randint(1, 3) if dispatch_result.triggered else 0
+    dispatch_result = finalize_fault(
+        attempt,
+        response.fault_observation,
+        policy_state=resolved_policy_state,
     )
 
     trajectory = _build_trajectory(
@@ -346,12 +549,20 @@ def _execute_task(
         prompt=prompt,
         response=response,
         dispatch_result=dispatch_result,
-        latency_ms=latency,
-        success=success,
-        policy_violations=policy_violations,
-        interventions=interventions,
+        success=response.success,
+        policy_violations=response.policy_violations,
+        interventions=response.interventions,
+        control_pair_id=control_pair_id,
+        control_role=control_role,
+        control_outcome=control_outcome,
+        control_evidence_reference=control_evidence_reference,
     )
-    vector = _build_reliability_vector(trajectory, chaos_triggered=dispatch_result.verified)
+    vector = _build_reliability_vector(
+        trajectory,
+        chaos_triggered=dispatch_result.verified,
+        latency_observed=response.latency_ms is not None,
+        cost_observed=response.cost_usd is not None,
+    )
     return trajectory, vector
 
 
@@ -370,6 +581,25 @@ class ControlExperimentResult:
     control_vector: ReliabilityVector
     experiment: Trajectory
     experiment_vector: ReliabilityVector
+
+
+def _fork_pair_agents(
+    agent: AgentUnderTest,
+    fault: catalog.FaultDefinition,
+    seed: int,
+) -> tuple[AgentUnderTest, AgentUnderTest]:
+    """Validate local capability and fork isolated deterministic pair instances."""
+
+    if not isinstance(agent, LocalFaultCapableAgent):
+        raise FaultDispatchError(
+            f"Fault '{fault.fault_id}' requires an isolated local-capability agent."
+        )
+    if fault.runtime_capability not in agent.runtime_capabilities:
+        raise FaultDispatchError(
+            f"Agent '{type(agent).__name__}' does not advertise required capability "
+            f"'{fault.runtime_capability.value}'."
+        )
+    return agent.fork_for_run(seed), agent.fork_for_run(seed)
 
 
 def run_control_and_experiment(
@@ -397,11 +627,38 @@ def run_control_and_experiment(
             uses.
     """
 
+    fault = catalog.resolve_fault(fault_id)
+    if fault.fault_id != catalog.BASELINE.fault_id:
+        control_agent, experiment_agent = _fork_pair_agents(agent, fault, seed)
+    else:
+        control_agent = agent
+        experiment_agent = agent
+    pair_id = f"pair:{scenario.name}:{task_id}:seed-{seed}:{fault.fault_id}"
     control_trajectory, control_vector = _execute_task(
-        agent, scenario, run_id, task_id, catalog.BASELINE.fault_id, seed, random.Random(seed)
+        control_agent,
+        scenario,
+        run_id,
+        task_id,
+        catalog.BASELINE.fault_id,
+        seed,
+        random.Random(seed),
+        control_pair_id=pair_id,
+        control_role="control",
     )
     experiment_trajectory, experiment_vector = _execute_task(
-        agent, scenario, run_id, task_id, fault_id, seed, random.Random(seed)
+        experiment_agent,
+        scenario,
+        run_id,
+        task_id,
+        fault_id,
+        seed,
+        random.Random(seed),
+        control_pair_id=pair_id,
+        control_role="experiment",
+        control_outcome=control_trajectory.outcome.goal_achieved,
+        control_evidence_reference=(
+            f"trajectory:{run_id}:{task_id}:pair:{pair_id}:control-outcome"
+        ),
     )
     return ControlExperimentResult(
         control=control_trajectory,
@@ -425,13 +682,55 @@ def _run_tasks(
 
     disruptions = [reference.resolved_fault_id for reference in scenario.disruptions]
     executions: list[_TaskExecution] = []
+    policy_states: dict[str, FaultPolicyState] = {}
 
     for index in range(iterations):
         task_id = f"task-{index + 1}"
         disruption = disruptions[index % len(disruptions)]
-        trajectory, vector = _execute_task(
-            agent, scenario, run_id, task_id, disruption, seed, random_source
-        )
+        fault = catalog.resolve_fault(disruption)
+        if fault.fault_id == catalog.BASELINE.fault_id:
+            trajectory, vector = _execute_task(
+                agent,
+                scenario,
+                run_id,
+                task_id,
+                disruption,
+                seed,
+                random_source,
+                policy_state=policy_states.setdefault(disruption, FaultPolicyState()),
+            )
+        else:
+            control_agent, experiment_agent = _fork_pair_agents(agent, fault, seed)
+            pair_id = f"pair:{scenario.name}:{task_id}:seed-{seed}:{fault.fault_id}"
+            control_rng = random.Random()
+            control_rng.setstate(random_source.getstate())
+            control_trajectory, _ = _execute_task(
+                control_agent,
+                scenario,
+                run_id,
+                task_id,
+                catalog.BASELINE.fault_id,
+                seed,
+                control_rng,
+                control_pair_id=pair_id,
+                control_role="control",
+            )
+            trajectory, vector = _execute_task(
+                experiment_agent,
+                scenario,
+                run_id,
+                task_id,
+                disruption,
+                seed,
+                random_source,
+                policy_state=policy_states.setdefault(disruption, FaultPolicyState()),
+                control_pair_id=pair_id,
+                control_role="experiment",
+                control_outcome=control_trajectory.outcome.goal_achieved,
+                control_evidence_reference=(
+                    f"trajectory:{run_id}:{task_id}:pair:{pair_id}:control-outcome"
+                ),
+            )
         event = RunEvent.from_trajectory(trajectory)
         drift = detect_drift(event, threshold=settings.drift_threshold)
         trust = score_trust(event, drift, threshold=settings.trust_threshold)
@@ -442,7 +741,14 @@ def _run_tasks(
             trust_score=trust.score,
             trustworthy=trust.trustworthy,
         )
-        executions.append(_TaskExecution(result=result, trajectory=trajectory, vector=vector))
+        executions.append(
+            _TaskExecution(
+                result=result,
+                event=event,
+                trajectory=trajectory,
+                vector=vector,
+            )
+        )
 
     return executions
 
@@ -504,10 +810,24 @@ def run_reliability_loop(
     return [execution.result for execution in executions]
 
 
-def _config_fingerprint(scenario: Scenario, evaluation_suite: EvaluationSuite | None) -> str:
-    """Compute a deterministic content hash covering scenario and suite configuration."""
+def _config_fingerprint(
+    scenario: Scenario,
+    evaluation_suite: EvaluationSuite | None,
+    *,
+    seed: int,
+    trust_threshold: float,
+    drift_threshold: float,
+) -> str:
+    """Hash static configuration plus effective Phase 1 execution inputs."""
 
-    payload: dict[str, object] = {"scenario": asdict(scenario)}
+    payload: dict[str, object] = {
+        "scenario": asdict(scenario),
+        "execution": {
+            "seed": seed,
+            "trust_threshold": trust_threshold,
+            "drift_threshold": drift_threshold,
+        },
+    }
     if evaluation_suite is not None:
         payload["suite"] = asdict(evaluation_suite)
     encoded = json.dumps(payload, sort_keys=True, default=str).encode("utf-8")
@@ -561,12 +881,19 @@ def execute_and_persist_run(
         seed=resolved_seed,
     )
     results = [execution.result for execution in executions]
+    events = [execution.event for execution in executions]
     trajectories = [execution.trajectory for execution in executions]
     vectors = [execution.vector for execution in executions]
 
     agent_version = str(getattr(resolved_agent, "version", type(resolved_agent).__name__))
     scenario_version = f"{resolved_scenario.name}@{resolved_scenario.version}"
-    config_fingerprint = _config_fingerprint(resolved_scenario, settings.evaluation_suite)
+    config_fingerprint = _config_fingerprint(
+        resolved_scenario,
+        settings.evaluation_suite,
+        seed=resolved_seed,
+        trust_threshold=settings.trust_threshold,
+        drift_threshold=settings.drift_threshold,
+    )
 
     metadata = repository.write_run(
         results,
@@ -575,6 +902,9 @@ def execute_and_persist_run(
         agent_version=agent_version,
         config_fingerprint=config_fingerprint,
         seed=resolved_seed,
+        trust_threshold=settings.trust_threshold,
+        drift_threshold=settings.drift_threshold,
+        events=events,
         trajectories=trajectories,
         vectors=vectors,
     )
@@ -585,7 +915,10 @@ def execute_and_persist_run(
         agent_version=agent_version,
         config_fingerprint=config_fingerprint,
         seed=resolved_seed,
+        trust_threshold=settings.trust_threshold,
+        drift_threshold=settings.drift_threshold,
         results=results,
+        events=events,
         trajectories=trajectories,
         vectors=vectors,
     )
@@ -649,9 +982,24 @@ def _build_multi_agent_trajectory(
             else None
         )
         tool = ToolInvocation(
+            call_id=f"{episode.task_id}:worker:{index}",
             name=f"worker:{assignment.role.worker_id}",
-            call_payload=assignment.role.sub_task_prompt,
-            response_payload=response.output_text if response is not None else None,
+            call_payload=_redacted_content(
+                ContentKind.TOOL_PAYLOAD,
+                run_id=run_id,
+                task_id=episode.task_id,
+                evidence_name=f"step:{index}:tool-payload",
+            ),
+            response_payload=(
+                _redacted_content(
+                    ContentKind.TOOL_RESPONSE,
+                    run_id=run_id,
+                    task_id=episode.task_id,
+                    evidence_name=f"step:{index}:tool-response",
+                )
+                if response is not None
+                else None
+            ),
         )
         usage = _usage_metrics(
             assignment.role.sub_task_prompt,
@@ -666,9 +1014,35 @@ def _build_multi_agent_trajectory(
                 tool=tool,
                 fault=fault,
                 recovered=fault is not None and fault.verified and response is not None,
+                recovery=(
+                    RecoveryEvidence(
+                        fault_id=fault.fault_id,
+                        action="worker_response_received",
+                        successful=True,
+                        evidence_references=(
+                            f"trajectory:{run_id}:{episode.task_id}:step:{index}:recovery",
+                        ),
+                    )
+                    if fault is not None and fault.verified and response is not None
+                    else None
+                ),
                 usage=usage,
-                prompt_text=assignment.role.sub_task_prompt,
-                output_text=response.output_text if response is not None else None,
+                prompt_text=_redacted_content(
+                    ContentKind.PROMPT,
+                    run_id=run_id,
+                    task_id=episode.task_id,
+                    evidence_name=f"step:{index}:prompt",
+                ),
+                output_text=(
+                    _redacted_content(
+                        ContentKind.OUTPUT,
+                        run_id=run_id,
+                        task_id=episode.task_id,
+                        evidence_name=f"step:{index}:output",
+                    )
+                    if response is not None
+                    else None
+                ),
             )
         )
         if response is not None:
@@ -678,6 +1052,9 @@ def _build_multi_agent_trajectory(
     outcome = Outcome(
         goal_achieved=episode.success,
         label="goal_achieved" if episode.success else "goal_failed",
+        status=OutcomeStatus.SUCCEEDED if episode.success else OutcomeStatus.FAILED,
+        terminal_state=steps[-1].final_state,
+        evidence_references=(f"trajectory:{run_id}:{episode.task_id}:outcome",),
     )
 
     return Trajectory(

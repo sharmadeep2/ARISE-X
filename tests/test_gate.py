@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import random
 from dataclasses import replace
-from datetime import date
+from datetime import UTC, date, datetime, timedelta
 
 import pytest
 
@@ -27,7 +27,14 @@ from arise_x.scenarios import (
     SuiteTask,
     Threshold,
 )
-from arise_x.telemetry.trajectory import FaultTrigger, Outcome, Step, Trajectory
+from arise_x.telemetry.trajectory import (
+    FaultTrigger,
+    Outcome,
+    OutcomeStatus,
+    RecoveryEvidence,
+    Step,
+    Trajectory,
+)
 from arise_x.trust.gate import (
     CriticalMetricConfig,
     EpisodeSliOutcome,
@@ -35,6 +42,7 @@ from arise_x.trust.gate import (
     ErrorBudgetState,
     GateOutcome,
     HeldOutSuiteError,
+    ProductionEpisode,
     aggregate_reliability,
     classify_episode_sli,
     default_dimension_configs,
@@ -42,9 +50,34 @@ from arise_x.trust.gate import (
     evaluate_release,
     geometric_ari,
     production_window_policy,
+    select_production_window,
     validate_held_out_suite,
 )
-from arise_x.trust.vector import DimensionScore, ReliabilityVector, VectorDimension
+from arise_x.trust.vector import (
+    ConfidenceMetadata,
+    DimensionScore,
+    ReliabilityVector,
+    VectorDimension,
+)
+
+
+def _score(
+    dimension: VectorDimension,
+    value: float,
+    *,
+    available: bool = True,
+) -> DimensionScore:
+    if not available:
+        return DimensionScore.unavailable(dimension, evidence_total=1)
+    return DimensionScore(
+        dimension=dimension,
+        value=value,
+        available=True,
+        evidence_count=1,
+        evidence_total=1,
+        confidence=ConfidenceMetadata(score=1.0, method="fixture_observation"),
+        evidence_references=(f"fixture:{dimension.value}",),
+    )
 
 
 def _trajectory(
@@ -61,13 +94,32 @@ def _trajectory(
     fault_verified: bool = False,
     recovered: bool = False,
 ) -> Trajectory:
-    fault = FaultTrigger(fault_id=fault_id, verified=fault_verified) if fault_id else None
+    fault = (
+        FaultTrigger(
+            fault_id=fault_id,
+            verified=fault_verified,
+            recovered=recovered if fault_verified else None,
+            affected_evidence_references=(f"fixture:{task_id}:fault",) if fault_verified else (),
+        )
+        if fault_id
+        else None
+    )
     step = Step(
         index=0,
         action="decide",
         state_transition="idle->done",
         fault=fault,
         recovered=recovered,
+        recovery=(
+            RecoveryEvidence(
+                fault_id=fault.fault_id,
+                action="retry",
+                successful=True,
+                evidence_references=(f"fixture:{task_id}:recovery",),
+            )
+            if recovered and fault is not None and fault.verified
+            else None
+        ),
     )
     return Trajectory(
         run_id=f"run-{task_id}-{repeat_id}",
@@ -83,7 +135,13 @@ def _trajectory(
         agent_id="agent-1",
         agent_version="v1",
         steps=(step,),
-        outcome=Outcome(goal_achieved=goal_achieved, label="done" if goal_achieved else "failed"),
+        outcome=Outcome(
+            goal_achieved=goal_achieved,
+            label="done" if goal_achieved else "failed",
+            status=OutcomeStatus.SUCCEEDED if goal_achieved else OutcomeStatus.FAILED,
+            terminal_state="done",
+            evidence_references=(f"fixture:{task_id}:outcome",),
+        ),
         policy_violation_count=policy_violations,
     )
 
@@ -107,12 +165,10 @@ def _observation(
         policy_violations=policy_violations,
     )
     scores = {
-        dim.value: DimensionScore(dimension=dim, value=0.5, available=True, evidence_count=1)
+        dim.value: _score(dim, 0.5)
         for dim in VectorDimension
     }
-    scores[dimension.value] = DimensionScore(
-        dimension=dimension, value=value, available=available, evidence_count=1
-    )
+    scores[dimension.value] = _score(dimension, value, available=available)
     return RunObservation(trajectory=trajectory, vector=ReliabilityVector(**scores))
 
 
@@ -292,7 +348,7 @@ def test_given_zero_eligible_episodes_when_evaluate_error_budget_then_no_data_st
     assert state.exhausted is False
 
 
-def test_given_allowed_bad_floors_to_zero_when_evaluate_error_budget_then_no_data_state() -> None:
+def test_given_fractional_budget_when_evaluate_error_budget_then_preserves_formula() -> None:
     # Arrange
     episodes = [EpisodeSliOutcome(task_id="t1", eligible=True, good=True, reason="")]
     policy = ErrorBudgetPolicy(slo_target=0.95, window_episode_count=1)
@@ -301,9 +357,9 @@ def test_given_allowed_bad_floors_to_zero_when_evaluate_error_budget_then_no_dat
     state = evaluate_error_budget(episodes, policy)
 
     # Assert
-    assert state.allowed_bad == 0
-    assert state.has_sufficient_data is False
-    assert state.remaining_budget_ratio is None
+    assert state.allowed_bad == pytest.approx(0.05)
+    assert state.has_sufficient_data is True
+    assert state.remaining_budget_ratio == pytest.approx(1.0)
 
 
 def test_given_slo_target_when_production_window_policy_then_uses_28_day_window() -> None:
@@ -315,6 +371,29 @@ def test_given_slo_target_when_production_window_policy_then_uses_28_day_window(
     assert policy.window_episode_count is None
 
 
+def test_given_timestamped_production_history_when_select_window_then_applies_calendar() -> None:
+    # Arrange
+    window_end = datetime(2026, 9, 22, tzinfo=UTC)
+    episodes = tuple(
+        ProductionEpisode(
+            source_run_id="production",
+            source_episode_id=f"episode-{index}",
+            occurred_at=window_end - timedelta(days=age),
+            outcome=EpisodeSliOutcome(f"task-{index}", True, True, "production"),
+        )
+        for index, age in enumerate((1, 10, 29))
+    )
+    policy = ErrorBudgetPolicy(0.95, window_days=28, minimum_eligible_count=2)
+
+    # Act
+    selected, inputs = select_production_window(episodes, policy, window_end=window_end)
+
+    # Assert
+    assert len(selected) == 2
+    assert inputs["selected_episode_count"] == 2
+    assert inputs["window_start"] == "2026-08-25T00:00:00+00:00"
+
+
 # --- Geometric ARI --------------------------------------------------------------------------
 
 
@@ -323,12 +402,8 @@ def test_given_available_dimensions_when_geometric_ari_then_matches_manual_geome
 ):
     # Arrange
     scores = (
-        DimensionScore(
-            dimension=VectorDimension.GOAL_SUCCESS, value=0.9, available=True, evidence_count=1
-        ),
-        DimensionScore(
-            dimension=VectorDimension.SAFETY, value=0.8, available=True, evidence_count=1
-        ),
+        _score(VectorDimension.GOAL_SUCCESS, 0.9),
+        _score(VectorDimension.SAFETY, 0.8),
         DimensionScore.unavailable(VectorDimension.RECOVERY),
     )
 
@@ -344,9 +419,7 @@ def test_given_unavailable_dimension_when_geometric_ari_then_excluded_not_zero_o
 ):
     # Arrange
     scores = (
-        DimensionScore(
-            dimension=VectorDimension.GOAL_SUCCESS, value=0.9, available=True, evidence_count=1
-        ),
+        _score(VectorDimension.GOAL_SUCCESS, 0.9),
         DimensionScore.unavailable(VectorDimension.SAFETY),
     )
 
@@ -373,7 +446,7 @@ def test_given_added_high_scoring_dimension_when_geometric_ari_then_does_not_col
 ):
     # Arrange
     base_scores = tuple(
-        DimensionScore(dimension=dimension, value=0.9, available=True, evidence_count=1)
+        _score(dimension, 0.9)
         for dimension in (
             VectorDimension.GOAL_SUCCESS,
             VectorDimension.RESILIENCE,
@@ -381,9 +454,7 @@ def test_given_added_high_scoring_dimension_when_geometric_ari_then_does_not_col
         )
     )
     extended_scores = base_scores + (
-        DimensionScore(
-            dimension=VectorDimension.EFFICIENCY, value=0.95, available=True, evidence_count=1
-        ),
+        _score(VectorDimension.EFFICIENCY, 0.95),
     )
 
     # Act
@@ -432,12 +503,12 @@ def test_given_mixed_availability_vectors_when_aggregate_reliability_then_means_
     # Arrange
     first = ReliabilityVector(
         **{
-            dim.value: DimensionScore(dimension=dim, value=0.6, available=True, evidence_count=1)
+            dim.value: _score(dim, 0.6)
             for dim in VectorDimension
         }
     )
     second_scores = {
-        dim.value: DimensionScore(dimension=dim, value=0.8, available=True, evidence_count=1)
+        dim.value: _score(dim, 0.8)
         for dim in VectorDimension
     }
     second_scores[VectorDimension.SAFETY.value] = DimensionScore.unavailable(
@@ -540,11 +611,11 @@ def test_given_non_critical_material_drift_when_evaluate_release_then_warns() ->
     for i in range(40):
         candidate_value = 0.5 - 0.3 + rng.uniform(-0.02, 0.02)
         baseline.append(_observation(
-            f"task-{i}", f"cluster-{i % 2}", VectorDimension.EFFICIENCY, 0.5
+            f"task-{i}", f"cluster-{i}", VectorDimension.EFFICIENCY, 0.5
         ))
         candidate.append(
             _observation(
-                f"task-{i}", f"cluster-{i % 2}", VectorDimension.EFFICIENCY, candidate_value
+                f"task-{i}", f"cluster-{i}", VectorDimension.EFFICIENCY, candidate_value
             )
         )
     configs = {
@@ -605,7 +676,7 @@ def _independent_production_budget() -> ErrorBudgetState:
 
 def _complete_comparison() -> DriftComparisonResult:
     observations = [
-        _observation(f"task-{i}", f"cluster-{i % 2}", VectorDimension.GOAL_SUCCESS, 1.0)
+        _observation(f"task-{i}", f"cluster-{i}", VectorDimension.GOAL_SUCCESS, 1.0)
         for i in range(20)
     ]
     configs = {dim: DimensionTestConfig(0.1, 0.05) for dim in (
@@ -772,7 +843,7 @@ def test_given_development_only_evidence_when_evaluate_release_then_blocks_with_
     # Assert
     assert verdict.outcome is GateOutcome.BLOCK
     assert verdict.held_out_suite_reasons != ()
-    assert verdict.critical_override_reasons == ()
+    assert verdict.critical_override_reasons != ()
 
 
 def test_given_exhausted_error_budget_when_evaluate_release_then_blocks_independently_of_drift() -> (  # noqa: E501
@@ -781,11 +852,11 @@ def test_given_exhausted_error_budget_when_evaluate_release_then_blocks_independ
     # Arrange: a clean, non-regressing drift comparison, but an already
     # exhausted trailing production error budget.
     baseline = [
-        _observation(f"task-{i}", "cluster-a", VectorDimension.GOAL_SUCCESS, 1.0)
+        _observation(f"task-{i}", f"cluster-{i}", VectorDimension.GOAL_SUCCESS, 1.0)
         for i in range(20)
     ]
     candidate = [
-        _observation(f"task-{i}", "cluster-a", VectorDimension.GOAL_SUCCESS, 1.0)
+        _observation(f"task-{i}", f"cluster-{i}", VectorDimension.GOAL_SUCCESS, 1.0)
         for i in range(20)
     ]
     configs = {

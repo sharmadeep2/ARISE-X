@@ -53,6 +53,7 @@ class DriftTestMethod(StrEnum):
 
     WILCOXON_SIGNED_RANK = "wilcoxon_signed_rank"
     PAIRED_PERMUTATION = "paired_permutation"
+    PAIRED_CLUSTER_PERMUTATION = "paired_cluster_permutation"
     EXACT_MCNEMAR = "exact_mcnemar"
 
 
@@ -83,6 +84,8 @@ class DimensionTestConfig:
     minimum_detectable_effect: float
     tolerance: float
     is_binary: bool = False
+    pilot_standard_deviation: float | None = None
+    minimum_cluster_count: int = 2
 
     def __post_init__(self) -> None:
         if not math.isfinite(self.minimum_detectable_effect) or self.minimum_detectable_effect <= 0:
@@ -94,6 +97,13 @@ class DimensionTestConfig:
         if not math.isfinite(self.tolerance) or self.tolerance < 0:
             msg = f"tolerance must be non-negative, got {self.tolerance}"
             raise ValueError(msg)
+        if self.pilot_standard_deviation is not None and (
+            not math.isfinite(self.pilot_standard_deviation)
+            or self.pilot_standard_deviation <= 0
+        ):
+            raise ValueError("pilot_standard_deviation must be positive when supplied")
+        if self.minimum_cluster_count < 2:
+            raise ValueError("minimum_cluster_count must be at least 2")
 
 
 @dataclass(frozen=True)
@@ -123,8 +133,13 @@ class DimensionDriftResult:
     test_method: DriftTestMethod | None
     paired_task_count: int
     effective_cluster_count: int
+    coverage: float
+    confidence_level: float
     target_power: float
     achieved_power: float | None
+    required_observations: int
+    power_analysis_unit: str
+    cluster_sufficient: bool
     raw_p_value: float | None
     corrected_p_value: float | None
     significant: bool
@@ -168,8 +183,13 @@ class _PendingDimensionOutcome:
     test_method: DriftTestMethod | None
     paired_task_count: int
     effective_cluster_count: int
+    coverage: float
+    confidence_level: float
     target_power: float
     achieved_power: float | None
+    required_observations: int
+    power_analysis_unit: str
+    cluster_sufficient: bool
     raw_p_value: float | None
     effect_size: float | None
     confidence_interval: tuple[float, float] | None
@@ -494,8 +514,13 @@ def _finalize(
         test_method=pending.test_method,
         paired_task_count=pending.paired_task_count,
         effective_cluster_count=pending.effective_cluster_count,
+        coverage=pending.coverage,
+        confidence_level=pending.confidence_level,
         target_power=pending.target_power,
         achieved_power=pending.achieved_power,
+        required_observations=pending.required_observations,
+        power_analysis_unit=pending.power_analysis_unit,
+        cluster_sufficient=pending.cluster_sufficient,
         raw_p_value=pending.raw_p_value,
         corrected_p_value=corrected_p_value,
         significant=significant,
@@ -543,11 +568,18 @@ def _analyze_dimension(
 
     downstream_impact = compute_downstream_impact_priority(dimension, baseline)
 
-    complete_coverage = all(
-        observation.vector.dimension(dimension).available
-        and observation.vector.dimension(dimension).evidence_count > 0
-        for observation in (*baseline, *candidate)
+    paired_observations = zip(baseline, candidate, strict=True)
+    complete_pair_count = sum(
+        1
+        for baseline_observation, candidate_observation in paired_observations
+        if baseline_observation.vector.dimension(dimension).available
+        and baseline_observation.vector.dimension(dimension).evidence_count > 0
+        and candidate_observation.vector.dimension(dimension).available
+        and candidate_observation.vector.dimension(dimension).evidence_count > 0
     )
+    expected_pair_count = len(baseline)
+    coverage = complete_pair_count / expected_pair_count if expected_pair_count else 0.0
+    complete_coverage = coverage == 1.0
     if config.is_binary and any(
         observation.vector.dimension(dimension).available
         and observation.vector.dimension(dimension).value not in (0.0, 1.0)
@@ -582,8 +614,13 @@ def _analyze_dimension(
             test_method=None,
             paired_task_count=0,
             effective_cluster_count=0,
+            coverage=coverage,
+            confidence_level=1.0 - alpha,
             target_power=target_power,
             achieved_power=None,
+            required_observations=1,
+            power_analysis_unit="task",
+            cluster_sufficient=False,
             raw_p_value=None,
             effect_size=None,
             confidence_interval=None,
@@ -597,7 +634,19 @@ def _analyze_dimension(
         cand - base for base, cand in zip(paired_baseline, paired_candidate, strict=True)
     ]
 
-    if config.is_binary and not repeats_present:
+    unique_clusters = sorted(set(clusters))
+    cluster_sizes = {cluster: clusters.count(cluster) for cluster in unique_clusters}
+    correlated_clusters = any(size > 1 for size in cluster_sizes.values())
+    cluster_sufficient = len(unique_clusters) >= config.minimum_cluster_count
+    if correlated_clusters and cluster_sufficient:
+        test_method = DriftTestMethod.PAIRED_CLUSTER_PERMUTATION
+        raw_p_value = _paired_cluster_permutation_p_value(
+            diffs,
+            clusters,
+            n_resamples=permutation_resamples,
+            random_seed=random_seed,
+        )
+    elif config.is_binary and not repeats_present and not correlated_clusters:
         test_method = DriftTestMethod.EXACT_MCNEMAR
         raw_p_value = _exact_mcnemar_p_value(paired_baseline, paired_candidate)
     else:
@@ -611,11 +660,7 @@ def _analyze_dimension(
 
     effect_size = sum(diffs) / paired_task_count
 
-    unique_clusters = sorted(set(clusters))
-    cluster_sizes = {cluster: clusters.count(cluster) for cluster in unique_clusters}
-    use_cluster_bootstrap = len(unique_clusters) > 1 and any(
-        size > 1 for size in cluster_sizes.values()
-    )
+    use_cluster_bootstrap = cluster_sufficient and correlated_clusters
     if use_cluster_bootstrap:
         confidence_interval = _cluster_bootstrap_ci(
             diffs, clusters, alpha=alpha, iterations=bootstrap_iterations, random_seed=random_seed
@@ -625,9 +670,24 @@ def _analyze_dimension(
             diffs, alpha=alpha, iterations=bootstrap_iterations, random_seed=random_seed
         )
 
-    diff_std = _sample_std(diffs)
+    if correlated_clusters:
+        power_values = _cluster_means(diffs, clusters)
+        power_analysis_unit = "cluster"
+    else:
+        power_values = diffs
+        power_analysis_unit = "task"
+    observed_std = _sample_std(power_values)
+    power_std = config.pilot_standard_deviation or max(
+        observed_std, config.minimum_detectable_effect
+    )
+    required_observations = required_sample_size(
+        config.minimum_detectable_effect,
+        power_std,
+        alpha=alpha,
+        power=target_power,
+    )
     power_now = achieved_power(
-        paired_task_count, config.minimum_detectable_effect, diff_std, alpha=alpha
+        len(power_values), config.minimum_detectable_effect, power_std, alpha=alpha
     )
 
     return _PendingDimensionOutcome(
@@ -636,8 +696,13 @@ def _analyze_dimension(
         test_method=test_method,
         paired_task_count=paired_task_count,
         effective_cluster_count=len(unique_clusters),
+        coverage=coverage,
+        confidence_level=1.0 - alpha,
         target_power=target_power,
         achieved_power=power_now,
+        required_observations=required_observations,
+        power_analysis_unit=power_analysis_unit,
+        cluster_sufficient=cluster_sufficient,
         raw_p_value=raw_p_value,
         effect_size=effect_size,
         confidence_interval=confidence_interval,
@@ -752,6 +817,60 @@ def _paired_permutation_p_value(
         random_state=random_seed,
     )
     return float(result.pvalue)
+
+
+def _cluster_means(diffs: Sequence[float], clusters: Sequence[str]) -> list[float]:
+    """Aggregate paired task differences to independent cluster analysis units."""
+
+    grouped: dict[str, list[float]] = {}
+    for diff, cluster in zip(diffs, clusters, strict=True):
+        grouped.setdefault(cluster, []).append(diff)
+    return [sum(grouped[cluster]) / len(grouped[cluster]) for cluster in sorted(grouped)]
+
+
+def _paired_cluster_permutation_p_value(
+    diffs: Sequence[float],
+    clusters: Sequence[str],
+    *,
+    n_resamples: int,
+    random_seed: int,
+) -> float:
+    """Two-sided sign-flip permutation test over independent cluster means."""
+
+    cluster_diffs = _cluster_means(diffs, clusters)
+    observed = abs(sum(cluster_diffs) / len(cluster_diffs))
+    if observed < 1e-12:
+        return 1.0
+
+    permutation_count = 2 ** len(cluster_diffs)
+    if permutation_count <= n_resamples:
+        sign_patterns = (
+            tuple(
+                1.0 if mask & (1 << index) else -1.0
+                for index in range(len(cluster_diffs))
+            )
+            for mask in range(permutation_count)
+        )
+        permuted = [
+            abs(
+                sum(
+                    sign * diff
+                    for sign, diff in zip(signs, cluster_diffs, strict=True)
+                )
+                / len(cluster_diffs)
+            )
+            for signs in sign_patterns
+        ]
+        return sum(value >= observed - 1e-12 for value in permuted) / len(permuted)
+
+    rng = random.Random(random_seed)
+    extreme_count = 0
+    for _ in range(n_resamples):
+        permuted_mean = sum(
+            rng.choice((-1.0, 1.0)) * diff for diff in cluster_diffs
+        ) / len(cluster_diffs)
+        extreme_count += abs(permuted_mean) >= observed - 1e-12
+    return (extreme_count + 1) / (n_resamples + 1)
 
 
 def _sample_std(values: Sequence[float]) -> float:

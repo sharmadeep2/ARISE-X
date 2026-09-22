@@ -18,13 +18,75 @@ The user requested phase-wise execution and selected verification of the existin
 
 Baseline revalidation: 205 tests passed; Ruff, imports, OpenAPI and explicit run-loop smoke passed. Negative probes reproduced overwritten run IDs, read-path escape, raw payload persistence, synthetic no-fault failures, and gate acceptance without independent production budget. Historical completion claims below are superseded by this audit. Existing green tests lack these acceptance cases.
 
+### Phase 0 completion 2026-09-09
+
+* Modified configs/evaluation-suite.yaml: added deterministic task seeds and valid protected-payload fingerprints required by suite governance.
+* Modified src/arise_x/config.py, src/arise_x/scenarios/__init__.py and src/arise_x/scenarios/models.py: enforce suite task, cluster, partition, seed, fingerprint and disruption-reference governance; preserve legacy experiment-root compatibility; validate runtime overrides; resolve held-out payloads only through an injected resolver with fingerprint verification.
+* Modified src/arise_x/storage/repository.py: complete exclusive immutable writes, confined run identifiers, legacy-summary coexistence, strict nested-schema validation and ordered evidence identity checks without changing the persisted schema version.
+* Modified tests/test_config.py: cover environment errors, suite governance, structured disruption resolution and protected held-out payload access. Existing repository acceptance tests cover overwrite races, unsafe paths, schema corruption and evidence alignment.
+* Validation: focused Phase 0 tests passed with 145 passed and 8 Windows symlink tests skipped; focused Ruff passed; editor diagnostics are clear.
+* Compatibility check: runner/API slice produced 21 passed and 32 failures, all in the still-open Phase 5 gate transport contract. The full suite produced 359 passed, 8 skipped and the same 32 downstream failures. No runner or Phase 0 contract regression was observed.
+* Repository-wide Ruff remains blocked by 11 pre-existing findings in two untouched research utilities under .copilot-tracking/research/2026-09-13/. The focused Phase 0 Ruff command passes.
+* Result: original Phase 0 Steps 0.1-0.3 now satisfy their acceptance criteria. Platform-complete symlink validation remains WI-13.
+
+### Phase 1 completion 2026-09-09
+
+* Modified src/arise_x/agents/base.py and src/arise_x/evaluation/runner.py: adapter-supplied success, violations, interventions and optional usage are authoritative; unsupported faults cannot silently mutate outcomes; injected agents are called once per task and exceptions surface unchanged.
+* Modified src/arise_x/evaluation/runner.py and src/arise_x/storage/repository.py: effective seed and runtime trust/drift thresholds enter persisted metadata and configuration fingerprints; returned run IDs resolve to matching evidence.
+* Modified src/arise_x/main.py and src/arise_x/api/app.py: preserve existing run keys and defaults, persist through the shared runner service and reject unknown API scenario names rather than ignoring them.
+* Modified tests/test_agent_execution.py, tests/test_runner.py, tests/test_repository.py and tests/test_api.py: add exception propagation, authoritative response, fingerprint, persistence and scenario-validation acceptance coverage.
+* Validation: Phase 1 selection passed with 177 passed, 8 host-limited symlink skips and 33 Phase 5 gate tests deselected; focused Ruff passed; CLI run-loop smoke exited 0 and persisted three deterministic iterations.
+* Exact unfiltered phase command: 178 passed, 8 skipped and 32 failures, all in the still-open Phase 5 gate transport contract. The final repository suite reports 367 passed, 8 skipped and the same 32 failures. No Phase 1 failure category remains.
+* Result: original Phase 1 Steps 1.1-1.3 satisfy their acceptance criteria. Genuine fault dispatch, redaction, recovery and control pairing remain in WI-09 for Phases 2-4.
+
+### Phase 2 completion 2026-09-09
+
+* Modified src/arise_x/telemetry/trajectory.py and src/arise_x/telemetry/__init__.py: enforce typed ordered steps, terminal state/outcome consistency, finite non-negative usage, verified recovery evidence, recursively frozen collections and explicit redacted-content markers for prompts, tool payloads/responses and outputs.
+* Modified src/arise_x/trust/vector.py and src/arise_x/trust/scorer.py: require positive evidence, explicit coverage denominators, confidence metadata, unique evidence references and matching normalization/schema identity for all available dimensions; retain the additive trust score as a compatibility diagnostic rather than ARI.
+* Modified src/arise_x/evaluation/runner.py and src/arise_x/storage/repository.py: emit redaction markers by default, carry evidence metadata and strictly serialize/reconstruct the Phase 2 contracts. Raw persisted prompt content is rejected.
+* Modified src/arise_x/trust/gate.py, tests/test_drift.py and tests/test_gate.py only to propagate valid coverage/confidence metadata through existing aggregation and fixtures; no Phase 5 policy or transport behavior was implemented.
+* Modified tests/test_trajectory.py, tests/test_vector.py, tests/test_runner.py, tests/test_repository.py and tests/test_api.py: add negative runtime-type, terminal, recovery, finite-usage, nested immutability, evidence coverage and end-to-end redaction acceptance cases.
+* Validation: focused trajectory/vector/trust tests passed with 69 tests; runner/repository/drift/gate compatibility passed with 223 tests and 8 host-limited symlink skips; non-gate integration passed with 220 tests, 8 skips and 33 Phase 5 tests deselected. The final repository suite reports 387 passed, 8 skipped and the same 32 Phase 5 failures. Focused Ruff passed and editor diagnostics are clear.
+* Result: original Phase 2 Steps 2.1-2.3 satisfy their acceptance criteria. Genuine fault dispatch, abort semantics and persisted control pairing remain in WI-09 for Phase 4.
+
+### Phase 3 completion 2026-09-09
+
+* Modified src/arise_x/evaluation/runner.py: retain exactly one compatibility RunEvent beside each correlated trajectory and reliability vector; available dimensions reference the specific evidence that produced them while behavioral stability remains unavailable without comparison evidence.
+* Modified src/arise_x/storage/repository.py: advance the strict run envelope to schema 4, persist events with results/trajectories/vectors, enforce ordered one-to-one projection identity and reject older or incomplete schemas explicitly.
+* Modified src/arise_x/api/app.py and src/arise_x/main.py: preserve bounded legacy run responses, add compatibility-event counts, keep detailed redacted evidence behind explicit GET /runs/{run_id}, and report persisted run/vector summaries without transport-side scoring.
+* Modified tests/test_runner.py, tests/test_repository.py and tests/test_api.py: cover retained projections, schema 4 round trips/rejection, bounded summaries, explicit redacted detail and OpenAPI compatibility.
+* Modified README.md and docs/architecture.md: document the executable run-loop command, seven-plane implementation status, redacted evidence flow and accurate limits for chaos, gate and multi-agent code.
+* Validation: Phase 3 non-gate integration passed with 229 tests, 8 host-limited symlink skips and 33 Phase 5 tests deselected; the final repository suite reports 391 passed, 8 skipped and the same 32 Phase 5 failures. uv run ruff check src tests passed; CLI smoke exited 0; OpenAPI 3.1.0 generated with the summary/detail routes; editor diagnostics and git diff checks are clean.
+* Result: original Phase 3 Steps 3.1-3.4 satisfy their acceptance criteria. Genuine single-agent fault execution remains Phase 4, while production gate and durable multi-agent contracts remain Phases 5-6.
+
+### Phase 4 completion 2026-09-09
+
+* Modified src/arise_x/chaos/catalog.py and src/arise_x/chaos/injector.py: define typed intensity, bounded activation windows, executable abort policy, blast radius, expected observations, runtime capabilities and immutable attempt/observation/recovery receipts. Representative local Infrastructure, Tool, Data and Agent faults execute through explicit injection points; unsupported entries fail explicitly.
+* Modified src/arise_x/agents/base.py and src/arise_x/agents/scripted.py: preserve the minimum `AgentUnderTest.run_task` protocol while adding an optional local-fault capability, deterministic pair forking and a concrete local pipeline that reports observed effects before recovery.
+* Modified src/arise_x/evaluation/runner.py, src/arise_x/telemetry/trajectory.py and src/arise_x/trust/vector.py: prepare faults before execution, verify only matching observed effects, execute abort policy without calling the agent, isolate control/experiment state and RNG, persist pair provenance and derive resilience/recovery only from verified receipts.
+* Modified configs/experiment.yaml, README.md and docs/architecture.md: select the four bounded local representatives and document receipt semantics, local-only blast radius, accurate Levels 1-4 support and deferred Level 5 durable integration and Level 6 provider/model experiments.
+* Modified tests/test_agent_execution.py, tests/test_chaos.py, tests/test_gate.py, tests/test_runner.py, tests/test_trajectory.py and tests/test_vector.py: cover unsupported capability, untriggered, triggered/recovered, triggered/failed, aborted, replay-equivalent, isolated control/experiment and evidence-complete verified receipt behavior.
+* Validation: focused Phase 4 behavior passed with 145 tests; affected compatibility and Phase 4 behavior passed with 195 tests; strict persistence/non-gate API integration passed with 278 tests, 8 host-limited symlink skips and 33 Phase 5 tests deselected. The final repository suite reports 406 passed, 8 skipped and exactly the same 32 known Phase 5 gate transport failures. `uv run ruff check src tests`, editor diagnostics and diff checks pass.
+* Result: original Phase 4 Steps 4.1-4.4 satisfy their acceptance criteria. WI-09 is resolved. Production-valid gate transport remains Phase 5, while durable multi-agent integration remains Phase 6.
+
+### Phase 5 completion 2026-09-22
+
+* Modified src/arise_x/drift/statistics.py: enforce paired task/repeat identity, suite/scenario/cluster context, vector schema and normalization, complete coverage, valid binary values, cluster-aware resampling and analysis-unit-consistent power evidence. Per-dimension results retain Holm-corrected significance, practical tolerance, confidence, coverage, required observations and independent impact evidence.
+* Modified src/arise_x/trust/gate.py and src/arise_x/config.py: implement a versioned vector-first policy with geometric ARI, critical overrides, required-dimension and cluster/power fail-safe checks, protected held-out validation, fractional episode error budgets and deterministic calendar or bounded production windows.
+* Added src/arise_x/fingerprints.py and modified src/arise_x/storage/repository.py: persist path-confined, exclusive-create gate decisions whose stable identity includes immutable run IDs plus canonical policy/suite fingerprints. Reads verify strict JSON compatibility and recompute snapshot fingerprints so tampered decisions are rejected.
+* Modified src/arise_x/main.py and src/arise_x/api/app.py: delegate CLI and HTTP gates to one GateService. Completed pass/warn decisions exit 0, completed blocks exit 1, invalid or incomplete comparisons exit 2; HTTP returns bounded 200 verdicts and stable 404/422 transport errors without leaking private exception text.
+* Modified configs/experiment.yaml, configs/evaluation-suite.yaml, README.md and docs/architecture.md: document the versioned example policy, independent production history, held-out release boundary, decision provenance, transport semantics and calibration limits without claiming standalone production authorization.
+* Modified tests/test_drift.py, tests/test_gate.py, tests/test_repository.py, tests/test_runner.py and tests/test_api.py: cover comparability, power/cluster/coverage failure, fractional budgets, production windows, immutable decision reuse and tamper rejection, shared HTTP/CLI behavior, OpenAPI compatibility and unchanged production artifacts.
+* Validation: the focused Phase 5 suite passed with 296 tests and 8 host-limited symlink skips. Decision integrity/API regression passed with 220 tests and 8 skips. `uv sync` resolved 70 packages and audited 60; `uv run ruff check src tests` passed. The final repository suite passed with 448 tests and 8 skips; the only warning is the existing Starlette `httpx` deprecation.
+* Result: original Phase 5 Steps 5.1-5.5 satisfy their acceptance criteria. WI-10 and WI-11 are resolved for the framework contract; domain-specific policy calibration remains WI-01 and is intentionally not claimed.
+
 ### Phase 0 persistence repair
 
 * Modified src/arise_x/storage/repository.py: exclusive-create immutable run writes; ID validation and path confinement on reads/lookup/exists; legacy summary filtering; supported nested schema, run identity and evidence alignment checks. Metadata-only runs and legacy write_results remain compatible.
 * Modified tests/test_repository.py: negative acceptance coverage for overwrite races, invalid Windows/path-traversal identifiers, symlink escape, legacy coexistence, corrupt schemas and evidence correlation; corrected the inconsistent historical round-trip fixture.
 * Validation: focused repository/runner/API tests 142 passed, 8 skipped; full suite 316 passed, 8 skipped; full Ruff passed; editor diagnostics clear.
 * Limitation: eight real-symlink tests require unavailable Windows symlink privileges. Deterministic guard tests passed. Vector correlation remains positional because existing vector contracts contain no task/run identifiers. No schema revision introduced.
-* Original Phase 0 remains partial: configuration/governance and protected-resolver requirements are unresolved. This bounded repair does not complete all of Step 0.2's future provenance requirements.
+* Superseded on 2026-09-09: the later Phase 0 completion slice resolves configuration/governance and protected-resolver requirements. Future provenance requirements outside the Phase 0 details remain deferred.
 
 ### Phase 5 fail-closed boundary repair
 
@@ -46,7 +108,7 @@ Baseline revalidation: 205 tests passed; Ruff, imports, OpenAPI and explicit run
 
 The resumed task modified 11 product/test/documentation files (2 persistence, 7 gate code/tests, 2 product documents), added one audit report and updated four existing tracking artifacts: 1 added / 15 modified / 0 removed in this session. No dependencies, schemas or deployments changed. Counts describe this session, not Git changes; the repository is unborn and all project content is untracked.
 
-Two bounded repair slices completed. All eight original phases remain partial; acceptance checkboxes were corrected to reflect the audit rather than historical claims. Final validation passes for the repaired slice with the stated skips. Current CLI/API gates intentionally cannot PASS until independent production evidence is supported. Next implementation requires bounded plans for truthful local execution/redaction, production-history and decision provenance, statistical design, and durable star integration.
+Phases 0-5 now satisfy their original acceptance criteria. Current validation passes with 448 tests and the stated host-limited skips. The gate can pass only with compatible powered held-out evidence and an independent production-history window; bundled thresholds remain uncalibrated examples. The next implementation is durable star-topology integration in Phase 6.
 
 ## Changes
 
@@ -151,6 +213,7 @@ Two bounded repair slices completed. All eight original phases remain partial; a
 * The CLI validation command `uv run arise-x run-loop --iterations 3` does not work because Typer flattens a single-command app so the command name is not required; this is pre-existing behavior unrelated to Phase 1 (the app had exactly one registered command before and after this phase's changes). The equivalent `uv run arise-x --iterations 3` succeeds and was used for validation instead. Flagged as a pre-existing CLI/documentation follow-up for Phase 7.
 * Phase 7 follow-up resolution: Phase 3 added a second CLI command (`@app.command("run-loop")` explicitly, alongside the later Phase 5 `gate` command), so the app is no longer single-command and Typer no longer flattens it. `uv run arise-x run-loop --iterations 3` now works exactly as originally documented; this was reverified during Phase 7 final validation.
 * Follow-on scope note (not a blocker): CLI- and API-generated runs are always tagged with `suite_partition="development"` (per the Phase 3 documented default, since suite-driven task selection is not yet wired). This means the `gate` command/endpoint will always correctly `block` on held-out-suite grounds for runs produced by `run-loop`/`POST /run` today; a genuine `pass` verdict is reachable only with directly-constructed held-out-partition evidence (as exercised in `tests/test_gate.py`). This is the intended fail-safe behavior, not a defect, and is tracked as follow-on work item WI-01 (production gate calibration) in the Planning Log.
+* Phase 4 validation initially reported one unused import and four new full-suite failures. Removed the unused import, changed two minimum-protocol fixtures to use an explicit baseline-only scenario, and supplied evidence references/recovery state in two verified-fault gate fixtures. Production contracts remained strict; focused and full validation returned to the known Phase 5 boundary.
 
 ## Historical Release Summary Superseded by Revalidation
 

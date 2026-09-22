@@ -2,8 +2,21 @@
 
 from __future__ import annotations
 
-from arise_x.agents.base import AgentResponse, AgentUnderTest
+from arise_x.agents.base import (
+	AgentResponse,
+	AgentUnderTest,
+	FaultObservation,
+	LocalExecutionContext,
+	LocalFaultCapableAgent,
+)
 from arise_x.agents.scripted import ScriptedAgent
 
-__all__ = ["AgentResponse", "AgentUnderTest", "ScriptedAgent"]
+__all__ = [
+	"AgentResponse",
+	"AgentUnderTest",
+	"FaultObservation",
+	"LocalExecutionContext",
+	"LocalFaultCapableAgent",
+	"ScriptedAgent",
+]
 

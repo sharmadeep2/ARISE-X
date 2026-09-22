@@ -1,47 +1,4 @@
-"""Typed fault catalog for ARISE-X chaos experiments.
-
-This module owns the fault taxonomy: four primary levels (Infrastructure,
-Tool, Data, Agent) plus three cross-cutting families (Cost,
-Security/Adversarial, Human-in-the-loop) that can apply across levels
-instead of being modeled as a separate level (DD-07), plus a fifth
-Multi-Agent level (Phase 6, DD-09) covering the star-topology coordinator
-introduced in :mod:`arise_x.agents.multi_agent`. Level 6 (Model) remains
-fully deferred to a later phase.
-
-Every :class:`FaultDefinition` in :data:`CATALOG` is a real, correctly
-classified entry, but only three are actually dispatched by
-``evaluation/runner.py`` in this phase, because the runner still builds
-exactly one :class:`~arise_x.telemetry.trajectory.Step` per single-agent
-task and has no tool-call, multi-step, or agent-state pipeline to inject
-the remaining faults against:
-
-* ``baseline`` (Infrastructure) - the no-fault control.
-* ``latency_spike`` (Infrastructure) - existing probability-boost/latency
-  disruption.
-* ``tool_degradation`` (Tool) - existing probability-boost/latency
-  disruption.
-
-Their :attr:`FaultDefinition.runtime_dispatch` is ``True`` and
-:func:`arise_x.chaos.injector.dispatch_fault` implements real sampling for
-them. Every other cataloged fault (Data and Agent levels, the Cost,
-Security/Adversarial, and Human-in-the-loop families, and all Multi-Agent
-level faults) has ``runtime_dispatch=False``: it is a valid taxonomy entry
-with a description, abort condition, and verification requirement, but
-dispatch through this flag/``dispatch_fault`` gate is deferred. Two
-Multi-Agent faults - ``message_loss`` and ``information_withholding`` - are
-an exception to "deferred": they have real, tested runtime dispatch today,
-just through a separate mechanism that does not use this flag or
-``dispatch_fault``'s gate, because they apply against the star-topology
-coordinator's per-worker message/context exchange rather than the
-single-agent task-execution runner. See
-:func:`arise_x.chaos.injector.dispatch_message_loss` and
-:func:`arise_x.chaos.injector.dispatch_information_withholding`.
-
-This module reuses :class:`arise_x.telemetry.trajectory.FaultTrigger` as the
-step-level fault-evidence record rather than defining a second, competing
-receipt type; see :class:`arise_x.chaos.injector.FaultDispatchResult` for
-the dispatch-time receipt that feeds it.
-"""
+"""Typed fault taxonomy and bounded policy contracts for chaos experiments."""
 
 from __future__ import annotations
 
@@ -85,6 +42,10 @@ class InjectionPoint(StrEnum):
     """
 
     TASK_EXECUTION = "task_execution"
+    BEFORE_AGENT_EXECUTION = "before_agent_execution"
+    TOOL_CALL = "tool_call"
+    DATA_ACCESS = "data_access"
+    OUTPUT_VERIFICATION = "output_verification"
     COORDINATION = "coordination"
 
 
@@ -95,6 +56,113 @@ class InjectionStrategy(StrEnum):
     PERSISTENT = "persistent"
     INTERMITTENT = "intermittent"
     BURST = "burst"
+
+
+class AbortCondition(StrEnum):
+    """Executable condition that bounds repeated fault activation."""
+
+    NEVER = "never"
+    MAX_VERIFIED_TRIGGERS = "max_verified_triggers"
+
+
+class AbortAction(StrEnum):
+    """Action taken when an abort condition is met."""
+
+    STOP_INJECTION = "stop_injection"
+
+
+class BlastRadiusScope(StrEnum):
+    """Maximum local scope a fault is allowed to affect."""
+
+    NONE = "none"
+    SINGLE_TASK = "single_task"
+    SINGLE_WORKER = "single_worker"
+
+
+class RuntimeCapability(StrEnum):
+    """Runtime contract required to execute a catalog fault."""
+
+    NONE = "none"
+    LOCAL_CONTEXT_V1 = "local_context_v1"
+    MULTI_AGENT_COORDINATION_V1 = "multi_agent_coordination_v1"
+
+
+class ObservationSignal(StrEnum):
+    """Observable local effects used to verify representative MVP faults."""
+
+    NONE = "none"
+    LOCAL_DEPENDENCY_DELAY = "local_dependency_delay"
+    LOCAL_TOOL_DEGRADATION = "local_tool_degradation"
+    LOCAL_STALE_DATA = "local_stale_data"
+    LOCAL_VERIFICATION_SKIPPED = "local_verification_skipped"
+
+
+@dataclass(frozen=True)
+class FaultWindow:
+    """Bounded activation duration expressed in local execution steps."""
+
+    duration_steps: int = 1
+    max_activations: int = 1
+
+    def __post_init__(self) -> None:
+        if self.duration_steps <= 0 or self.max_activations <= 0:
+            raise FaultCatalogError("Fault windows require positive step and activation bounds.")
+
+
+@dataclass(frozen=True)
+class AbortPolicy:
+    """Executable abort policy evaluated before a fault reaches its injection point."""
+
+    condition: AbortCondition = AbortCondition.MAX_VERIFIED_TRIGGERS
+    threshold: int = 3
+    action: AbortAction = AbortAction.STOP_INJECTION
+
+    def __post_init__(self) -> None:
+        if self.condition is AbortCondition.NEVER:
+            if self.threshold != 0:
+                raise FaultCatalogError("The never abort condition requires threshold=0.")
+        elif self.threshold <= 0:
+            raise FaultCatalogError("Executable abort policies require a positive threshold.")
+
+    def should_abort(self, *, verified_trigger_count: int) -> bool:
+        """Return whether injection must stop for the supplied policy state."""
+
+        if self.condition is AbortCondition.NEVER:
+            return False
+        return verified_trigger_count >= self.threshold
+
+
+@dataclass(frozen=True)
+class BlastRadiusPolicy:
+    """Bound the number and scope of local targets affected by one activation."""
+
+    scope: BlastRadiusScope = BlastRadiusScope.SINGLE_TASK
+    max_targets: int = 1
+
+    def __post_init__(self) -> None:
+        if self.scope is BlastRadiusScope.NONE:
+            if self.max_targets != 0:
+                raise FaultCatalogError("A no-effect blast radius requires max_targets=0.")
+        elif self.max_targets <= 0:
+            raise FaultCatalogError("A bounded blast radius requires a positive max_targets.")
+
+    @property
+    def bounded(self) -> bool:
+        """Return whether this policy imposes a finite positive target bound."""
+
+        return self.scope is not BlastRadiusScope.NONE and self.max_targets > 0
+
+
+@dataclass(frozen=True)
+class ExpectedObservation:
+    """Signal and verification rule required to establish a real fault effect."""
+
+    signal: ObservationSignal = ObservationSignal.NONE
+    verification: str = "runtime-specific evidence must match the configured injection point"
+
+    def __post_init__(self) -> None:
+        if not self.verification.strip():
+            raise FaultCatalogError("Expected observations require a verification rule.")
 
 
 @dataclass(frozen=True)
@@ -109,9 +177,8 @@ class FaultDefinition:
         description: Human-readable description of the fault's effect.
         injection_point: Execution stage this fault applies to.
         strategy: How repeatedly the fault applies once selected.
-        abort_condition: Guard that halts further injection, for example a
-            max-consecutive-failure count or a cost-budget threshold. Kept
-            as a simple descriptive string for this MVP.
+        abort_condition: Human-readable compatibility description of the
+            executable ``abort_policy``.
         verification: What confirms this fault actually manifested, rather
             than merely being configured (AgentChaos trigger-verification
             methodology).
@@ -142,6 +209,13 @@ class FaultDefinition:
     failure_boost: float = 0.0
     latency_multiplier: float = 1.0
     runtime_dispatch: bool = False
+    intensity: float = 1.0
+    window: FaultWindow = FaultWindow()
+    abort_policy: AbortPolicy = AbortPolicy()
+    blast_radius: BlastRadiusPolicy = BlastRadiusPolicy()
+    expected_observation: ExpectedObservation = ExpectedObservation()
+    external_side_effect: bool = False
+    runtime_capability: RuntimeCapability = RuntimeCapability.NONE
 
     def __post_init__(self) -> None:
         if not self.fault_id:
@@ -164,6 +238,22 @@ class FaultDefinition:
             raise FaultCatalogError(
                 f"Fault '{self.fault_id}' latency_multiplier must be positive."
             )
+        if not 0.0 < self.intensity <= 1.0:
+            raise FaultCatalogError(
+                f"Fault '{self.fault_id}' intensity must be within (0.0, 1.0]."
+            )
+        if self.runtime_dispatch and self.runtime_capability is RuntimeCapability.NONE:
+            raise FaultCatalogError(
+                f"Fault '{self.fault_id}' runtime dispatch requires a runtime capability."
+            )
+        if self.external_side_effect and (
+            not self.blast_radius.bounded
+            or self.abort_policy.condition is AbortCondition.NEVER
+        ):
+            raise FaultCatalogError(
+                f"Fault '{self.fault_id}' has external side effects and requires a bounded "
+                "blast radius plus an executable abort condition."
+            )
 
 
 # Dispatched today: mirror the pre-existing DisruptionProfile constants in
@@ -178,32 +268,53 @@ BASELINE = FaultDefinition(
     abort_condition="not applicable: baseline injects no fault",
     verification="not applicable: baseline is the no-fault control",
     runtime_dispatch=True,
+    intensity=1.0,
+    window=FaultWindow(duration_steps=1, max_activations=1),
+    abort_policy=AbortPolicy(condition=AbortCondition.NEVER, threshold=0),
+    blast_radius=BlastRadiusPolicy(scope=BlastRadiusScope.NONE, max_targets=0),
+    expected_observation=ExpectedObservation(
+        signal=ObservationSignal.NONE,
+        verification="baseline performs no injection and requires no trigger observation",
+    ),
+    runtime_capability=RuntimeCapability.LOCAL_CONTEXT_V1,
 )
 
 LATENCY_SPIKE = FaultDefinition(
     fault_id="latency_spike",
     level=FaultLevel.INFRASTRUCTURE,
     description="Elevated end-to-end latency and failure probability simulating a slow upstream dependency.",  # noqa: E501
-    injection_point=InjectionPoint.TASK_EXECUTION,
+    injection_point=InjectionPoint.BEFORE_AGENT_EXECUTION,
     strategy=InjectionStrategy.PERSISTENT,
     abort_condition="abort after 3 consecutive verified triggers in one run",
     verification="chaos sampling fired and the task would otherwise have succeeded",
     failure_boost=0.10,
     latency_multiplier=2.0,
     runtime_dispatch=True,
+    intensity=0.5,
+    expected_observation=ExpectedObservation(
+        signal=ObservationSignal.LOCAL_DEPENDENCY_DELAY,
+        verification="the local dependency delay is observed before agent execution",
+    ),
+    runtime_capability=RuntimeCapability.LOCAL_CONTEXT_V1,
 )
 
 TOOL_DEGRADATION = FaultDefinition(
     fault_id="tool_degradation",
     level=FaultLevel.TOOL,
     description="Simulated tool-call quality degradation increasing failure probability and latency.",  # noqa: E501
-    injection_point=InjectionPoint.TASK_EXECUTION,
+    injection_point=InjectionPoint.TOOL_CALL,
     strategy=InjectionStrategy.PERSISTENT,
     abort_condition="abort after 3 consecutive verified triggers in one run",
     verification="chaos sampling fired and the task would otherwise have succeeded",
     failure_boost=0.20,
     latency_multiplier=1.4,
     runtime_dispatch=True,
+    intensity=0.5,
+    expected_observation=ExpectedObservation(
+        signal=ObservationSignal.LOCAL_TOOL_DEGRADATION,
+        verification="the deterministic local tool returns a degraded first response",
+    ),
+    runtime_capability=RuntimeCapability.LOCAL_CONTEXT_V1,
 )
 
 # Cataloged for future dispatch: real, valid taxonomy entries with no
@@ -353,10 +464,18 @@ STALE_DATA = FaultDefinition(
     fault_id="stale_data",
     level=FaultLevel.DATA,
     description="The agent reads data that is out of date relative to the current task state.",
-    injection_point=InjectionPoint.TASK_EXECUTION,
+    injection_point=InjectionPoint.DATA_ACCESS,
     strategy=InjectionStrategy.PERSISTENT,
     abort_condition="abort after 3 consecutive verified stale-data reads in one run",
     verification=f"{_FUTURE_VERIFICATION_PREFIX} data-freshness metadata is modeled",
+    failure_boost=0.25,
+    runtime_dispatch=True,
+    intensity=0.5,
+    expected_observation=ExpectedObservation(
+        signal=ObservationSignal.LOCAL_STALE_DATA,
+        verification="the local data source returns a stale version before refresh",
+    ),
+    runtime_capability=RuntimeCapability.LOCAL_CONTEXT_V1,
 )
 
 MISSING_DATA = FaultDefinition(
@@ -495,10 +614,18 @@ VERIFICATION_FAILURE = FaultDefinition(
         "before finishing (research-identified Level 4 gap; MAST found task-verification "
         "failures account for roughly 21% of observed multi-agent failures)."
     ),
-    injection_point=InjectionPoint.TASK_EXECUTION,
+    injection_point=InjectionPoint.OUTPUT_VERIFICATION,
     strategy=InjectionStrategy.SINGLE,
     abort_condition="abort after 1 verified self-check omission in one run",
     verification=f"{_FUTURE_VERIFICATION_PREFIX} an explicit self-verification step is modeled",
+    failure_boost=0.25,
+    runtime_dispatch=True,
+    intensity=1.0,
+    expected_observation=ExpectedObservation(
+        signal=ObservationSignal.LOCAL_VERIFICATION_SKIPPED,
+        verification="the primary local output verification is skipped and observed",
+    ),
+    runtime_capability=RuntimeCapability.LOCAL_CONTEXT_V1,
 )
 
 HUMAN_ESCALATION_TIMEOUT = FaultDefinition(
@@ -578,6 +705,7 @@ MESSAGE_LOSS = FaultDefinition(
         "response as not received (see arise_x.chaos.injector.dispatch_message_loss)"
     ),
     failure_boost=0.25,
+    runtime_capability=RuntimeCapability.MULTI_AGENT_COORDINATION_V1,
 )
 
 CONFLICTING_OBJECTIVES = FaultDefinition(
@@ -644,6 +772,7 @@ INFORMATION_WITHHOLDING = FaultDefinition(
         "arise_x.chaos.injector.dispatch_information_withholding)"
     ),
     failure_boost=0.25,
+    runtime_capability=RuntimeCapability.MULTI_AGENT_COORDINATION_V1,
 )
 
 UNREQUESTED_CLARIFICATION_MISSING = FaultDefinition(
@@ -758,12 +887,6 @@ def get_fault(fault_id: str) -> FaultDefinition:
 
 
 def resolve_fault(fault_id: str) -> FaultDefinition:
-    """Resolve ``fault_id`` to a catalog fault definition, defaulting to :data:`BASELINE`.
+    """Resolve ``fault_id`` to a definition without silently changing its meaning."""
 
-    Preserves the pre-Phase-4 runner behavior where any disruption name not
-    recognized as a known profile silently resolved to the baseline (no-op)
-    profile, so existing scenario manifests using bare disruption names
-    continue to work unchanged.
-    """
-
-    return _BY_ID.get(fault_id, BASELINE)
+    return get_fault(fault_id)

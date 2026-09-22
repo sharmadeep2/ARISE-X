@@ -1,4 +1,4 @@
-"""Trust score computation for release-gate style decisions."""
+"""Legacy additive trust diagnostic retained for compatibility."""
 
 from __future__ import annotations
 
@@ -10,14 +10,14 @@ from arise_x.telemetry.events import RunEvent
 
 @dataclass(frozen=True)
 class TrustDecision:
-    """Composite trust score and pass or fail verdict."""
+    """Legacy additive diagnostic score and threshold verdict."""
 
     score: float
     trustworthy: bool
 
 
 def score_trust(event: RunEvent, drift: DriftResult, threshold: float) -> TrustDecision:
-    """Compute trust score where 1.0 is best and 0.0 is worst."""
+    """Compute the compatibility diagnostic; this score is not the ARI."""
 
     reliability = 1.0 if event.success else 0.0
     safety = max(0.0, 1.0 - (event.policy_violations * 0.1))

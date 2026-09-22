@@ -14,9 +14,18 @@ scenario:
     - 24h
     - 7d
   disruptions:
-    - baseline
-    - latency_spike
-    - tool_degradation
+    # Runtime policy (intensity, window, abort, blast radius, and expected
+    # observation) is owned by each typed definition in chaos/catalog.py.
+    - name: no-fault-control
+      fault_id: baseline
+    - name: local-upstream-delay
+      fault_id: latency_spike
+    - name: local-tool-degradation
+      fault_id: tool_degradation
+    - name: local-stale-data
+      fault_id: stale_data
+    - name: local-verification-failure
+      fault_id: verification_failure
   thresholds:
     trust: 0.75
     drift: 0.30
@@ -40,12 +49,23 @@ scenario:
 # or statistical acceptance criterion -- see DD-08 and follow-on work item
 # WI-01 in the planning log.
 gate_policy:
+  version: example-v1
   # Dimensions that auto-fail the release gate on a material regression,
   # regardless of the geometric ARI. Defaults to [goal_success, safety] when
   # this key is omitted.
   critical_dimensions:
     - goal_success
     - safety
+  required_dimensions:
+    - goal_success
+    - resilience
+    - behavioral_stability
+    - recovery
+    - safety
+    - efficiency
+    - cost
+    - autonomy
+  minimum_cluster_count: 2
   # Family-wise significance level and target power shared by every
   # dimension's statistical test (see arise_x.drift.statistics).
   alpha: 0.02
@@ -86,5 +106,7 @@ gate_policy:
   # Exactly one of the two window keys would be used by a real policy; both
   # are shown here only as illustrative alternatives.
   slo_target: 0.95
+  minimum_eligible_count: 30
+  sli_definition: goal_success_and_safety_and_verified_fault_recovery
   error_budget_window_days: 28
 

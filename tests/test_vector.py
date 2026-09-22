@@ -4,7 +4,12 @@ from __future__ import annotations
 
 import pytest
 
-from arise_x.trust.vector import DimensionScore, ReliabilityVector, VectorDimension
+from arise_x.trust.vector import (
+    ConfidenceMetadata,
+    DimensionScore,
+    ReliabilityVector,
+    VectorDimension,
+)
 
 
 def _score(
@@ -19,6 +24,11 @@ def _score(
         value=value,
         available=available,
         evidence_count=evidence_count,
+        evidence_total=evidence_count,
+        confidence=ConfidenceMetadata(score=0.95, method="direct_observation"),
+        evidence_references=[
+            f"trajectory:run-1:task-{index}:step-0" for index in range(evidence_count)
+        ],
     )
 
 
@@ -76,6 +86,9 @@ def test_given_out_of_range_value_when_construct_score_then_raises_value_error(
             value=value,
             available=True,
             evidence_count=5,
+            evidence_total=5,
+            confidence=ConfidenceMetadata(score=0.95, method="direct_observation"),
+            evidence_references=tuple(f"evidence:{index}" for index in range(5)),
         )
 
 
@@ -87,6 +100,9 @@ def test_given_negative_evidence_count_when_construct_score_then_raises_value_er
             value=0.5,
             available=True,
             evidence_count=-1,
+            evidence_total=1,
+            confidence=ConfidenceMetadata(score=0.95, method="direct_observation"),
+            evidence_references=("evidence:0",),
         )
 
 
@@ -138,3 +154,89 @@ def test_given_two_vectors_when_one_dimension_changes_then_others_are_unaffected
     assert changed.safety.value == baseline.safety.value
     assert changed.efficiency.value == baseline.efficiency.value
     assert changed.autonomy.value == baseline.autonomy.value
+
+
+def test_given_available_score_without_positive_evidence_when_construct_then_raises() -> None:
+    # Act & Assert
+    with pytest.raises(ValueError, match="positive evidence"):
+        DimensionScore(
+            dimension=VectorDimension.GOAL_SUCCESS,
+            value=1.0,
+            available=True,
+            evidence_count=0,
+            evidence_total=1,
+            confidence=ConfidenceMetadata(score=0.95, method="direct_observation"),
+            evidence_references=(),
+        )
+
+
+def test_given_coverage_denominator_below_count_when_construct_then_raises() -> None:
+    # Act & Assert
+    with pytest.raises(ValueError, match="denominator"):
+        DimensionScore(
+            dimension=VectorDimension.GOAL_SUCCESS,
+            value=0.5,
+            available=True,
+            evidence_count=2,
+            evidence_total=1,
+            confidence=ConfidenceMetadata(score=0.95, method="direct_observation"),
+            evidence_references=("evidence:0", "evidence:1"),
+        )
+
+
+def test_given_available_score_without_confidence_when_construct_then_raises() -> None:
+    # Act & Assert
+    with pytest.raises(ValueError, match="confidence"):
+        DimensionScore(
+            dimension=VectorDimension.GOAL_SUCCESS,
+            value=0.5,
+            available=True,
+            evidence_count=1,
+            evidence_total=1,
+            confidence=None,
+            evidence_references=("evidence:0",),
+        )
+
+
+def test_given_available_score_without_references_when_construct_then_raises() -> None:
+    # Act & Assert
+    with pytest.raises(ValueError, match="reference"):
+        DimensionScore(
+            dimension=VectorDimension.GOAL_SUCCESS,
+            value=0.5,
+            available=True,
+            evidence_count=1,
+            evidence_total=1,
+            confidence=ConfidenceMetadata(score=0.95, method="direct_observation"),
+            evidence_references=(),
+        )
+
+
+def test_given_caller_owned_references_when_construct_then_recursively_freezes() -> None:
+    # Arrange
+    caller_references = ["evidence:0"]
+
+    # Act
+    score = DimensionScore(
+        dimension=VectorDimension.GOAL_SUCCESS,
+        value=1.0,
+        available=True,
+        evidence_count=1,
+        evidence_total=1,
+        confidence=ConfidenceMetadata(score=0.95, method="direct_observation"),
+        evidence_references=caller_references,
+    )
+    caller_references.append("evidence:1")
+
+    # Assert
+    assert score.evidence_references == ("evidence:0",)
+    assert score.evidence_coverage == pytest.approx(1.0)
+
+
+def test_given_duplicate_dimension_identity_when_construct_vector_then_raises() -> None:
+    # Arrange
+    duplicated = _score(VectorDimension.GOAL_SUCCESS, 0.8)
+
+    # Act & Assert
+    with pytest.raises(ValueError, match="Expected dimension"):
+        _full_vector(resilience=duplicated)
