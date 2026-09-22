@@ -1,0 +1,43 @@
+:root { color-scheme: light; font-family: "Segoe UI", Arial, sans-serif; color: #18283c; }
+* { box-sizing: border-box; }
+@page { size: A4; margin: 17mm 16mm 19mm;
+  @bottom-center { content: "Learning handbook  |  " counter(page) " / " counter(pages);
+    font-family: Arial, sans-serif; font-size: 8pt; color: #50647c; }
+}
+body { margin: 0 auto; max-width: 178mm; font-size: 10.5pt; line-height: 1.48; }
+a { color: #075b91; text-decoration-thickness: .6pt; overflow-wrap: anywhere; }
+p, li { orphans: 3; widows: 3; overflow-wrap: anywhere; }
+h1, h2, h3, h4, h5, h6 { break-after: avoid-page; page-break-after: avoid; line-height: 1.2; color: #11395a; }
+h1 { font-size: 32pt; }
+h2 { font-size: 19pt; border-bottom: 1.5pt solid #2d8a9f; padding-bottom: 5pt; margin-top: 22pt; }
+h3 { font-size: 14pt; margin-top: 18pt; }
+h4 { font-size: 11.5pt; }
+header.cover { min-height: 170mm; padding-top: 28mm; break-after: page; }
+.cover h1 { max-width: 155mm; }
+.cover h1 a { color: inherit; text-decoration: none; }
+.eyebrow { text-transform: uppercase; letter-spacing: 2pt; font-size: 9pt; color: #197389; }
+.subtitle { font-size: 15pt; color: #50647c; }
+nav { break-after: page; }
+nav ul { list-style: none; padding: 0; }
+nav li { margin: 5pt 0; break-inside: avoid; }
+nav .level-3 { padding-left: 16pt; font-size: 9.5pt; }
+blockquote { margin: 12pt 0; padding: 5pt 12pt; background: #f0f6f9; border-left: 3pt solid #2d8a9f; }
+pre { font-family: Consolas, "Courier New", monospace; font-size: 8pt; line-height: 1.36;
+  white-space: pre-wrap; overflow-wrap: anywhere; word-break: normal; tab-size: 4;
+  background: #f1f5f8; border-left: 2pt solid #9ab5c5; padding: 8pt;
+  max-width: 100%; break-inside: auto; box-decoration-break: clone;
+  orphans: 3; widows: 3; }
+pre code { font: inherit; white-space: inherit; background: transparent; padding: 0; }
+code { font-family: Consolas, "Courier New", monospace; font-size: 8.5pt; overflow-wrap: anywhere;
+  background: #eff3f7; padding: 1pt 2pt; }
+table { width: 100%; table-layout: fixed; border-collapse: collapse; font-size: 9pt; margin: 12pt 0; }
+th, td { border: .5pt solid #bfccd7; padding: 5pt; text-align: left; vertical-align: top;
+  overflow-wrap: anywhere; word-break: normal; }
+thead { display: table-header-group; background: #e8f0f5; }
+tr { break-inside: avoid; }
+th { font-weight: 600; color: #11395a; }
+img, svg { max-width: 100%; }
+.katex-display { margin: 14pt 0; break-inside: avoid; font-size: 1.02em; }
+.katex { font-size: 1.08em; }
+.endnote { border-top: .5pt solid #bfccd7; margin-top: 18pt; font-size: 9pt; }
+@media print { body { max-width: none; } * { print-color-adjust: exact; -webkit-print-color-adjust: exact; } }

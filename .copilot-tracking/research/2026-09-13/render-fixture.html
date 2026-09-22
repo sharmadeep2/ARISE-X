@@ -1,0 +1,250 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline' file:; font-src file:; img-src data:;">
+<title>Learning handbook print validation</title>
+<link rel="stylesheet" href="file:///C:/Users/sharmadeep/ARISE-X/.copilot-tracking/research/2026-09-13/render-assets/katex.min.css">
+<style>:root { color-scheme: light; font-family: "Segoe UI", Arial, sans-serif; color: #18283c; }
+* { box-sizing: border-box; }
+@page { size: A4; margin: 17mm 16mm 19mm;
+  @bottom-center { content: "Learning handbook  |  " counter(page) " / " counter(pages);
+    font-family: Arial, sans-serif; font-size: 8pt; color: #50647c; }
+}
+body { margin: 0 auto; max-width: 178mm; font-size: 10.5pt; line-height: 1.48; }
+a { color: #075b91; text-decoration-thickness: .6pt; overflow-wrap: anywhere; }
+p, li { orphans: 3; widows: 3; overflow-wrap: anywhere; }
+h1, h2, h3, h4, h5, h6 { break-after: avoid-page; page-break-after: avoid; line-height: 1.2; color: #11395a; }
+h1 { font-size: 32pt; }
+h2 { font-size: 19pt; border-bottom: 1.5pt solid #2d8a9f; padding-bottom: 5pt; margin-top: 22pt; }
+h3 { font-size: 14pt; margin-top: 18pt; }
+h4 { font-size: 11.5pt; }
+header.cover { min-height: 170mm; padding-top: 28mm; break-after: page; }
+.cover h1 { max-width: 155mm; }
+.cover h1 a { color: inherit; text-decoration: none; }
+.eyebrow { text-transform: uppercase; letter-spacing: 2pt; font-size: 9pt; color: #197389; }
+.subtitle { font-size: 15pt; color: #50647c; }
+nav { break-after: page; }
+nav ul { list-style: none; padding: 0; }
+nav li { margin: 5pt 0; break-inside: avoid; }
+nav .level-3 { padding-left: 16pt; font-size: 9.5pt; }
+blockquote { margin: 12pt 0; padding: 5pt 12pt; background: #f0f6f9; border-left: 3pt solid #2d8a9f; }
+pre { font-family: Consolas, "Courier New", monospace; font-size: 8pt; line-height: 1.36;
+  white-space: pre-wrap; overflow-wrap: anywhere; word-break: normal; tab-size: 4;
+  background: #f1f5f8; border-left: 2pt solid #9ab5c5; padding: 8pt;
+  max-width: 100%; break-inside: auto; box-decoration-break: clone;
+  orphans: 3; widows: 3; }
+pre code { font: inherit; white-space: inherit; background: transparent; padding: 0; }
+code { font-family: Consolas, "Courier New", monospace; font-size: 8.5pt; overflow-wrap: anywhere;
+  background: #eff3f7; padding: 1pt 2pt; }
+table { width: 100%; table-layout: fixed; border-collapse: collapse; font-size: 9pt; margin: 12pt 0; }
+th, td { border: .5pt solid #bfccd7; padding: 5pt; text-align: left; vertical-align: top;
+  overflow-wrap: anywhere; word-break: normal; }
+thead { display: table-header-group; background: #e8f0f5; }
+tr { break-inside: avoid; }
+th { font-weight: 600; color: #11395a; }
+img, svg { max-width: 100%; }
+.katex-display { margin: 14pt 0; break-inside: avoid; font-size: 1.02em; }
+.katex { font-size: 1.08em; }
+.endnote { border-top: .5pt solid #bfccd7; margin-top: 18pt; font-size: 9pt; }
+@media print { body { max-width: none; } * { print-color-adjust: exact; -webkit-print-color-adjust: exact; } }</style></head><body>
+<header class="cover" id="handbook-title"><p class="eyebrow">Learning handbook</p>
+<h1><a href="#contents">Learning handbook print validation</a></h1>
+<p class="subtitle">Training to production · Study, implement, verify</p>
+<p>Print edition · Linked contents and references</p></header>
+<nav id="contents" aria-label="Contents"><h2>Contents</h2><ul><li class="level-2"><a href="#reading-and-navigation">Reading and navigation</a></li><li class="level-2"><a href="#equations-and-meaning">Equations and meaning</a></li><li class="level-2"><a href="#configuration-and-narrow-tables">Configuration and narrow tables</a></li><li class="level-2"><a href="#ascii-architecture">ASCII architecture</a></li><li class="level-2"><a href="#page-spanning-code">Page-spanning code</a></li><li class="level-2"><a href="#end-of-fixture-checks">End-of-fixture checks</a></li></ul></nav>
+<main><h2 id="reading-and-navigation">Reading and navigation</h2>
+<p>SELECTABLE-TEXT-SENTINEL: This independent fixture tests a reusable print pipeline.
+It is not the concurrently authored primary handbook. Follow the
+<a href="#equations-and-meaning">equations section</a> and return through the linked contents.</p>
+<p>Watch <a href="https://www.youtube.com/watch?v=IHZwWFHWa-w">3Blue1Brown: Gradient descent</a>.
+The external video link must remain a clickable PDF annotation, without loading
+any remote video or thumbnail while printing.</p>
+<h2 id="equations-and-meaning">Equations and meaning</h2>
+<p>The prediction is <span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mover accent="true"><mi>y</mi><mo>^</mo></mover><mo>=</mo><mi>w</mi><mi>x</mi><mo>+</mo><mi>b</mi></mrow><annotation encoding="application/x-tex">\hat{y}=wx+b</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.8889em;vertical-align:-0.1944em;"></span><span class="mord accent"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.6944em;"><span style="top:-3em;"><span class="pstrut" style="height:3em;"></span><span class="mord mathnormal" style="margin-right:0.03588em;">y</span></span><span style="top:-3em;"><span class="pstrut" style="height:3em;"></span><span class="accent-body" style="left:-0.1944em;"><span class="mord">^</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.1944em;"><span></span></span></span></span></span><span class="mspace" style="margin-right:0.2778em;"></span><span class="mrel">=</span><span class="mspace" style="margin-right:0.2778em;"></span></span><span class="base"><span class="strut" style="height:0.6667em;vertical-align:-0.0833em;"></span><span class="mord mathnormal" style="margin-right:0.02691em;">w</span><span class="mord mathnormal">x</span><span class="mspace" style="margin-right:0.2222em;"></span><span class="mbin">+</span><span class="mspace" style="margin-right:0.2222em;"></span></span><span class="base"><span class="strut" style="height:0.6944em;"></span><span class="mord mathnormal">b</span></span></span></span>. A fraction <span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mfrac><mn>1</mn><mn>2</mn></mfrac></mrow><annotation encoding="application/x-tex">\frac{1}{2}</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:1.1901em;vertical-align:-0.345em;"></span><span class="mord"><span class="mopen nulldelimiter"></span><span class="mfrac"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.8451em;"><span style="top:-2.655em;"><span class="pstrut" style="height:3em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mtight">2</span></span></span></span><span style="top:-3.23em;"><span class="pstrut" style="height:3em;"></span><span class="frac-line" style="border-bottom-width:0.04em;"></span></span><span style="top:-3.394em;"><span class="pstrut" style="height:3em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mtight">1</span></span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.345em;"><span></span></span></span></span></span><span class="mclose nulldelimiter"></span></span></span></span></span> means one half.
+Parenthesis-delimited math also works: <span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>x</mi><mo>∈</mo><msup><mi mathvariant="double-struck">R</mi><mi>d</mi></msup></mrow><annotation encoding="application/x-tex">x \in \mathbb{R}^{d}</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.5782em;vertical-align:-0.0391em;"></span><span class="mord mathnormal">x</span><span class="mspace" style="margin-right:0.2778em;"></span><span class="mrel">∈</span><span class="mspace" style="margin-right:0.2778em;"></span></span><span class="base"><span class="strut" style="height:0.8491em;"></span><span class="mord"><span class="mord mathbb">R</span><span class="msupsub"><span class="vlist-t"><span class="vlist-r"><span class="vlist" style="height:0.8491em;"><span style="top:-3.063em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mathnormal mtight">d</span></span></span></span></span></span></span></span></span></span></span></span>.</p>
+<span class="katex-display"><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML" display="block"><semantics><mrow><mi>L</mi><mo stretchy="false">(</mo><mi>w</mi><mo stretchy="false">)</mo><mo>=</mo><mfrac><mn>1</mn><mi>N</mi></mfrac><munderover><mo>∑</mo><mrow><mi>i</mi><mo>=</mo><mn>1</mn></mrow><mi>N</mi></munderover><msup><mrow><mo fence="true">(</mo><mi>w</mi><msub><mi>x</mi><mi>i</mi></msub><mo>−</mo><msub><mi>y</mi><mi>i</mi></msub><mo fence="true">)</mo></mrow><mn>2</mn></msup></mrow><annotation encoding="application/x-tex">L(w)=\frac{1}{N}\sum_{i=1}^{N}\left(wx_i-y_i\right)^2</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mord mathnormal">L</span><span class="mopen">(</span><span class="mord mathnormal" style="margin-right:0.02691em;">w</span><span class="mclose">)</span><span class="mspace" style="margin-right:0.2778em;"></span><span class="mrel">=</span><span class="mspace" style="margin-right:0.2778em;"></span></span><span class="base"><span class="strut" style="height:3.106em;vertical-align:-1.2777em;"></span><span class="mord"><span class="mopen nulldelimiter"></span><span class="mfrac"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:1.3214em;"><span style="top:-2.314em;"><span class="pstrut" style="height:3em;"></span><span class="mord"><span class="mord mathnormal" style="margin-right:0.10903em;">N</span></span></span><span style="top:-3.23em;"><span class="pstrut" style="height:3em;"></span><span class="frac-line" style="border-bottom-width:0.04em;"></span></span><span style="top:-3.677em;"><span class="pstrut" style="height:3em;"></span><span class="mord"><span class="mord">1</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.686em;"><span></span></span></span></span></span><span class="mclose nulldelimiter"></span></span><span class="mspace" style="margin-right:0.1667em;"></span><span class="mop op-limits"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:1.8283em;"><span style="top:-1.8723em;margin-left:0em;"><span class="pstrut" style="height:3.05em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mathnormal mtight">i</span><span class="mrel mtight">=</span><span class="mord mtight">1</span></span></span></span><span style="top:-3.05em;"><span class="pstrut" style="height:3.05em;"></span><span><span class="mop op-symbol large-op">∑</span></span></span><span style="top:-4.3em;margin-left:0em;"><span class="pstrut" style="height:3.05em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mathnormal mtight" style="margin-right:0.10903em;">N</span></span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:1.2777em;"><span></span></span></span></span></span><span class="mspace" style="margin-right:0.1667em;"></span><span class="minner"><span class="minner"><span class="mopen delimcenter" style="top:0em;">(</span><span class="mord mathnormal" style="margin-right:0.02691em;">w</span><span class="mord"><span class="mord mathnormal">x</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3117em;"><span style="top:-2.55em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathnormal mtight">i</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.2222em;"></span><span class="mbin">−</span><span class="mspace" style="margin-right:0.2222em;"></span><span class="mord"><span class="mord mathnormal" style="margin-right:0.03588em;">y</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3117em;"><span style="top:-2.55em;margin-left:-0.0359em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathnormal mtight">i</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span><span class="mclose delimcenter" style="top:0em;">)</span></span><span class="msupsub"><span class="vlist-t"><span class="vlist-r"><span class="vlist" style="height:0.954em;"><span style="top:-3.2029em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight">2</span></span></span></span></span></span></span></span></span></span></span></span><p>This loss is the mean squared difference between the prediction and target.
+N is the number of examples, x is the input, y is the target, and w is a weight.</p>
+<span class="katex-display"><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML" display="block"><semantics><mrow><mfrac><mrow><mi mathvariant="normal">∂</mi><mi>L</mi></mrow><mrow><mi mathvariant="normal">∂</mi><mi>w</mi></mrow></mfrac><mo>=</mo><mfrac><mn>2</mn><mi>N</mi></mfrac><munderover><mo>∑</mo><mrow><mi>i</mi><mo>=</mo><mn>1</mn></mrow><mi>N</mi></munderover><mo stretchy="false">(</mo><mi>w</mi><msub><mi>x</mi><mi>i</mi></msub><mo>−</mo><msub><mi>y</mi><mi>i</mi></msub><mo stretchy="false">)</mo><msub><mi>x</mi><mi>i</mi></msub></mrow><annotation encoding="application/x-tex">\frac{\partial L}{\partial w}=\frac{2}{N}\sum_{i=1}^{N}(wx_i-y_i)x_i</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:2.0574em;vertical-align:-0.686em;"></span><span class="mord"><span class="mopen nulldelimiter"></span><span class="mfrac"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:1.3714em;"><span style="top:-2.314em;"><span class="pstrut" style="height:3em;"></span><span class="mord"><span class="mord" style="margin-right:0.05556em;">∂</span><span class="mord mathnormal" style="margin-right:0.02691em;">w</span></span></span><span style="top:-3.23em;"><span class="pstrut" style="height:3em;"></span><span class="frac-line" style="border-bottom-width:0.04em;"></span></span><span style="top:-3.677em;"><span class="pstrut" style="height:3em;"></span><span class="mord"><span class="mord" style="margin-right:0.05556em;">∂</span><span class="mord mathnormal">L</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.686em;"><span></span></span></span></span></span><span class="mclose nulldelimiter"></span></span><span class="mspace" style="margin-right:0.2778em;"></span><span class="mrel">=</span><span class="mspace" style="margin-right:0.2778em;"></span></span><span class="base"><span class="strut" style="height:3.106em;vertical-align:-1.2777em;"></span><span class="mord"><span class="mopen nulldelimiter"></span><span class="mfrac"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:1.3214em;"><span style="top:-2.314em;"><span class="pstrut" style="height:3em;"></span><span class="mord"><span class="mord mathnormal" style="margin-right:0.10903em;">N</span></span></span><span style="top:-3.23em;"><span class="pstrut" style="height:3em;"></span><span class="frac-line" style="border-bottom-width:0.04em;"></span></span><span style="top:-3.677em;"><span class="pstrut" style="height:3em;"></span><span class="mord"><span class="mord">2</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.686em;"><span></span></span></span></span></span><span class="mclose nulldelimiter"></span></span><span class="mspace" style="margin-right:0.1667em;"></span><span class="mop op-limits"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:1.8283em;"><span style="top:-1.8723em;margin-left:0em;"><span class="pstrut" style="height:3.05em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mathnormal mtight">i</span><span class="mrel mtight">=</span><span class="mord mtight">1</span></span></span></span><span style="top:-3.05em;"><span class="pstrut" style="height:3.05em;"></span><span><span class="mop op-symbol large-op">∑</span></span></span><span style="top:-4.3em;margin-left:0em;"><span class="pstrut" style="height:3.05em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mathnormal mtight" style="margin-right:0.10903em;">N</span></span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:1.2777em;"><span></span></span></span></span></span><span class="mopen">(</span><span class="mord mathnormal" style="margin-right:0.02691em;">w</span><span class="mord"><span class="mord mathnormal">x</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3117em;"><span style="top:-2.55em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathnormal mtight">i</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.2222em;"></span><span class="mbin">−</span><span class="mspace" style="margin-right:0.2222em;"></span></span><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mord"><span class="mord mathnormal" style="margin-right:0.03588em;">y</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3117em;"><span style="top:-2.55em;margin-left:-0.0359em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathnormal mtight">i</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span><span class="mclose">)</span><span class="mord"><span class="mord mathnormal">x</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3117em;"><span style="top:-2.55em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathnormal mtight">i</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span></span></span></span></span><p>The partial derivative measures how the loss changes when the weight changes.</p>
+<span class="katex-display"><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML" display="block"><semantics><mrow><mfrac><mi>d</mi><mrow><mi>d</mi><mi>x</mi></mrow></mfrac><msup><mi>x</mi><mn>2</mn></msup><mo>=</mo><mn>2</mn><mi>x</mi><mspace width="2em"/><mi>W</mi><mo>∈</mo><msup><mi mathvariant="double-struck">R</mi><mrow><msub><mi>d</mi><mrow><mi>o</mi><mi>u</mi><mi>t</mi></mrow></msub><mo>×</mo><msub><mi>d</mi><mrow><mi>i</mi><mi>n</mi></mrow></msub></mrow></msup></mrow><annotation encoding="application/x-tex">\frac{d}{dx}x^2=2x \qquad W\in\mathbb{R}^{d_{out}\times d_{in}}</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:2.0574em;vertical-align:-0.686em;"></span><span class="mord"><span class="mopen nulldelimiter"></span><span class="mfrac"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:1.3714em;"><span style="top:-2.314em;"><span class="pstrut" style="height:3em;"></span><span class="mord"><span class="mord mathnormal">d</span><span class="mord mathnormal">x</span></span></span><span style="top:-3.23em;"><span class="pstrut" style="height:3em;"></span><span class="frac-line" style="border-bottom-width:0.04em;"></span></span><span style="top:-3.677em;"><span class="pstrut" style="height:3em;"></span><span class="mord"><span class="mord mathnormal">d</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.686em;"><span></span></span></span></span></span><span class="mclose nulldelimiter"></span></span><span class="mord"><span class="mord mathnormal">x</span><span class="msupsub"><span class="vlist-t"><span class="vlist-r"><span class="vlist" style="height:0.8641em;"><span style="top:-3.113em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight">2</span></span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.2778em;"></span><span class="mrel">=</span><span class="mspace" style="margin-right:0.2778em;"></span></span><span class="base"><span class="strut" style="height:0.7224em;vertical-align:-0.0391em;"></span><span class="mord">2</span><span class="mord mathnormal">x</span><span class="mspace" style="margin-right:2em;"></span><span class="mord mathnormal" style="margin-right:0.13889em;">W</span><span class="mspace" style="margin-right:0.2778em;"></span><span class="mrel">∈</span><span class="mspace" style="margin-right:0.2778em;"></span></span><span class="base"><span class="strut" style="height:0.8991em;"></span><span class="mord"><span class="mord mathbb">R</span><span class="msupsub"><span class="vlist-t"><span class="vlist-r"><span class="vlist" style="height:0.8991em;"><span style="top:-3.113em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mtight"><span class="mord mathnormal mtight">d</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.2963em;"><span style="top:-2.357em;margin-left:0em;margin-right:0.0714em;"><span class="pstrut" style="height:2.5em;"></span><span class="sizing reset-size3 size1 mtight"><span class="mord mtight"><span class="mord mathnormal mtight">o</span><span class="mord mathnormal mtight">u</span><span class="mord mathnormal mtight">t</span></span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.143em;"><span></span></span></span></span></span></span><span class="mbin mtight">×</span><span class="mord mtight"><span class="mord mathnormal mtight">d</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3281em;"><span style="top:-2.357em;margin-left:0em;margin-right:0.0714em;"><span class="pstrut" style="height:2.5em;"></span><span class="sizing reset-size3 size1 mtight"><span class="mord mtight"><span class="mord mathnormal mtight">in</span></span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.143em;"><span></span></span></span></span></span></span></span></span></span></span></span></span></span></span></span></span></span></span><p>The derivative of x squared is twice x. The matrix W has output-dimension rows
+and input-dimension columns. These sentences preserve the meaning if copying
+individual mathematical glyphs from a PDF loses their two-dimensional order.</p>
+<h2 id="configuration-and-narrow-tables">Configuration and narrow tables</h2>
+<pre><code class="language-yaml">training:
+    batch_size: 32
+    optimizer:
+        name: adamw
+        learning_rate: 0.0003
+    shapes: [batch, sequence, hidden]
+    note: &quot;Spacing and indentation must survive print and text selection.&quot;
+</code></pre>
+<table>
+<thead>
+<tr>
+<th>Component</th>
+<th>Shape and contract</th>
+<th>Reference</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Embedding</td>
+<td>batch_size_by_sequence_length_by_hidden_dimension</td>
+<td><a href="https://www.youtube.com/watch?v=IHZwWFHWa-w">Video</a></td>
+</tr>
+<tr>
+<td>Long identifier</td>
+<td>exceptionally_long_identifier_without_any_spaces_must_wrap_inside_the_cell_and_not_clip</td>
+<td><a href="https://www.youtube.com/watch?v=IHZwWFHWa-w&amp;feature=shared&amp;annotation_id=independent_renderer_validation_long_url_wrapping_sample">https://www.youtube.com/watch?v=IHZwWFHWa-w&amp;feature=shared&amp;annotation_id=independent_renderer_validation_long_url_wrapping_sample</a></td>
+</tr>
+<tr>
+<td>Loss</td>
+<td>Scalar mean, not a per-token vector</td>
+<td>See <a href="#equations-and-meaning">equations</a></td>
+</tr>
+</tbody>
+</table>
+<p>Long URL outside a table:
+<a href="https://www.youtube.com/watch?v=IHZwWFHWa-w&amp;feature=shared&amp;annotation_id=independent_renderer_validation_long_url_wrapping_sample_with_extra_characters_for_the_print_width_check">https://www.youtube.com/watch?v=IHZwWFHWa-w&amp;feature=shared&amp;annotation_id=independent_renderer_validation_long_url_wrapping_sample_with_extra_characters_for_the_print_width_check</a>.</p>
+<h2 id="ascii-architecture">ASCII architecture</h2>
+<pre><code class="language-text">+------------------+      +------------------+      +------------------+
+| Input examples   | ---&gt; | Forward + loss   | ---&gt; | Backward + step  |
+| x: [batch, dim]  |      | prediction: yhat |      | update weights   |
++------------------+      +------------------+      +------------------+
+           |                                                 |
+           +--------------- repeat next batch ---------------+
+</code></pre>
+<p>Space columns, plus signs, vertical bars, and arrows must remain aligned.</p>
+<h2 id="page-spanning-code">Page-spanning code</h2>
+<p>The following unexecuted 120-line code sample must split naturally across pages.
+The first line, last line, and all numbered intermediate lines must remain
+selectable. A large block must not shrink to fit on one page.</p>
+<pre><code class="language-python">step_001 = 1
+step_002 = 2
+step_003 = 3
+step_004 = 4
+step_005 = 5
+step_006 = 6
+step_007 = 7
+step_008 = 8
+step_009 = 9
+step_010 = 10
+step_011 = 11
+step_012 = 12
+step_013 = 13
+step_014 = 14
+step_015 = 15
+step_016 = 16
+step_017 = 17
+step_018 = 18
+step_019 = 19
+step_020 = 20
+step_021 = 21
+step_022 = 22
+step_023 = 23
+step_024 = 24
+step_025 = 25
+step_026 = 26
+step_027 = 27
+step_028 = 28
+step_029 = 29
+step_030 = 30
+step_031 = 31
+step_032 = 32
+step_033 = 33
+step_034 = 34
+step_035 = 35
+step_036 = 36
+step_037 = 37
+step_038 = 38
+step_039 = 39
+step_040 = 40
+step_041 = 41
+step_042 = 42
+step_043 = 43
+step_044 = 44
+step_045 = 45
+step_046 = 46
+step_047 = 47
+step_048 = 48
+step_049 = 49
+step_050 = 50
+step_051 = 51
+step_052 = 52
+step_053 = 53
+step_054 = 54
+step_055 = 55
+step_056 = 56
+step_057 = 57
+step_058 = 58
+step_059 = 59
+step_060 = 60
+step_061 = 61
+step_062 = 62
+step_063 = 63
+step_064 = 64
+step_065 = 65
+step_066 = 66
+step_067 = 67
+step_068 = 68
+step_069 = 69
+step_070 = 70
+step_071 = 71
+step_072 = 72
+step_073 = 73
+step_074 = 74
+step_075 = 75
+step_076 = 76
+step_077 = 77
+step_078 = 78
+step_079 = 79
+step_080 = 80
+step_081 = 81
+step_082 = 82
+step_083 = 83
+step_084 = 84
+step_085 = 85
+step_086 = 86
+step_087 = 87
+step_088 = 88
+step_089 = 89
+step_090 = 90
+step_091 = 91
+step_092 = 92
+step_093 = 93
+step_094 = 94
+step_095 = 95
+step_096 = 96
+step_097 = 97
+step_098 = 98
+step_099 = 99
+step_100 = 100
+step_101 = 101
+step_102 = 102
+step_103 = 103
+step_104 = 104
+step_105 = 105
+step_106 = 106
+step_107 = 107
+step_108 = 108
+step_109 = 109
+step_110 = 110
+step_111 = 111
+step_112 = 112
+step_113 = 113
+step_114 = 114
+step_115 = 115
+step_116 = 116
+step_117 = 117
+step_118 = 118
+step_119 = 119
+step_120 = 120
+</code></pre>
+<h2 id="end-of-fixture-checks">End-of-fixture checks</h2>
+<p>END-OF-FIXTURE-SENTINEL: Verify this heading stays with this paragraph and that
+the page footer contains the page number and total page count. Inline literal
+code such as <code>&quot;$not_math$&quot;</code> must not be processed as an equation.</p>
+<pre><code class="language-text">    indentation is intentional
+        nested indentation remains eight spaces
+    long_line = &quot;A deliberately long code line with spaces that must wrap without losing its source indentation or clipping its final sentinel: CODE-WRAP-END&quot;
+</code></pre>
+</main><footer class="endnote"><a href="#contents">Back to contents</a></footer>
+</body></html>

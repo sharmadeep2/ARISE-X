@@ -1,0 +1,44 @@
+[project]
+name = "arise-x"
+version = "0.1.0"
+description = "Continuous reliability engineering system for autonomous agents"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.116.0",
+    "pydantic>=2.11.0",
+    "typer>=0.16.0",
+    "uvicorn>=0.35.0",
+    "ipykernel>=6.30.0",
+    "ipywidgets>=8.1.0",
+    "ruff>=0.12.0",
+    "tqdm>=4.67.0",
+    "pytest>=8.4.0",
+    "pyyaml>=6.0.3",
+    "scipy>=1.17.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest-cov>=6.2.0",
+]
+
+[project.scripts]
+arise-x = "arise_x.main:main"
+
+[[tool.uv.index]]
+url = "https://packagefeedproxy.microsoft.io/pypi/simple/"
+default = true
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28.1",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

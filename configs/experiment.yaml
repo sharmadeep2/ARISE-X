@@ -1,0 +1,90 @@
+scenario:
+  name: procurement-baseline
+  version: 1
+  objective: >-
+    Purchase 500 laptops within budget and ensure delivery before September 15.
+  constraints:
+    - "Total spend must not exceed the approved budget."
+    - "Delivery must be confirmed before the required date."
+  expected_outcome: >-
+    Purchase order created and approved, vendor selected within budget, and
+    shipment confirmed before the required delivery date.
+  seed: 20260825
+  horizons:
+    - 24h
+    - 7d
+  disruptions:
+    - baseline
+    - latency_spike
+    - tool_degradation
+  thresholds:
+    trust: 0.75
+    drift: 0.30
+  suite_ref:
+    suite_id: procurement-baseline-suite
+    version: 1
+  cluster_refs:
+    - cluster_id: vendor-comparison
+      family: procurement
+    - cluster_id: budget-approval
+      family: procurement
+    - cluster_id: negotiation-failure
+      family: procurement
+
+# EXAMPLE release-gate policy (Step 5.2/5.3, arise_x.trust.gate.GatePolicyConfig).
+# This section is optional; omitting it entirely falls back to gate.py's
+# bundled defaults (see arise_x.trust.gate.default_dimension_configs and
+# CriticalMetricConfig). Every numeric value below is illustrative and
+# requires domain-specific calibration (power analysis against real
+# production/held-out data) before being treated as a binding production SLO
+# or statistical acceptance criterion -- see DD-08 and follow-on work item
+# WI-01 in the planning log.
+gate_policy:
+  # Dimensions that auto-fail the release gate on a material regression,
+  # regardless of the geometric ARI. Defaults to [goal_success, safety] when
+  # this key is omitted.
+  critical_dimensions:
+    - goal_success
+    - safety
+  # Family-wise significance level and target power shared by every
+  # dimension's statistical test (see arise_x.drift.statistics).
+  alpha: 0.02
+  target_power: 0.80
+  # Per-dimension minimum-detectable-effect / tolerance / data-type overrides.
+  # Any VectorDimension not listed here falls back to gate.py's bundled
+  # default (minimum_detectable_effect=0.1, tolerance=0.05, is_binary=False).
+  dimensions:
+    goal_success:
+      minimum_detectable_effect: 0.05
+      tolerance: 0.02
+      is_binary: true
+    safety:
+      minimum_detectable_effect: 0.05
+      tolerance: 0.02
+    resilience:
+      minimum_detectable_effect: 0.1
+      tolerance: 0.05
+    behavioral_stability:
+      minimum_detectable_effect: 0.1
+      tolerance: 0.05
+    recovery:
+      minimum_detectable_effect: 0.1
+      tolerance: 0.05
+    efficiency:
+      minimum_detectable_effect: 0.1
+      tolerance: 0.08
+    cost:
+      minimum_detectable_effect: 0.1
+      tolerance: 0.08
+    autonomy:
+      minimum_detectable_effect: 0.1
+      tolerance: 0.08
+  # Reliability-SLI SLO target and trailing production error-budget window.
+  # The documented production default is a trailing 28-day calendar window;
+  # error_budget_window_episode_count is a bounded-episode-count alternative
+  # for deterministic testability (see arise_x.trust.gate.ErrorBudgetPolicy).
+  # Exactly one of the two window keys would be used by a real policy; both
+  # are shown here only as illustrative alternatives.
+  slo_target: 0.95
+  error_budget_window_days: 28
+

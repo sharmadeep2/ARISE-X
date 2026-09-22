@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+
+# Virtual environment
+.venv/
+
+# Tooling caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Distribution
+build/
+dist/
+*.egg-info/
+
+# Local configs and secrets
+.env
+.env.*
+
+# Logs and data artifacts
+logs/
+*.log
+artifacts/
+reports/
+*.validation/
+
+# Jupyter
+.ipynb_checkpoints/

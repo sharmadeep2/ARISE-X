@@ -1,0 +1,28 @@
+suite:
+  suite_id: procurement-baseline-suite
+  version: 1
+  owner: arise-x-eval-team
+  rotation_deadline: "2026-12-31"
+  access_policy: restricted-eval-team-only
+  protected_payload_locator: "configs/protected/procurement-baseline-suite/held_out/"
+  partitions:
+    development:
+      description: Tuning-visible tasks used for iteration on prompts and skills.
+      tasks:
+        - task_id: procurement-dev-001
+          family: procurement
+          cluster: vendor-comparison
+        - task_id: procurement-dev-002
+          family: procurement
+          cluster: budget-approval
+    held_out:
+      description: Protected tasks reserved for release-gating decisions only.
+      tasks:
+        - task_id: procurement-held-001
+          family: procurement
+          cluster: vendor-comparison
+          fingerprint: "sha256:2f8c9e1d4a7b6053f1c2d3e4a5b6c7d8e9f0a1b2c3d4e5f60718293a4b5c6d7e"
+        - task_id: procurement-held-002
+          family: procurement
+          cluster: negotiation-failure
+          fingerprint: "sha256:9a1b2c3d4e5f60718293a4b5c6d7e8f90123456789abcdef0123456789abcde"
